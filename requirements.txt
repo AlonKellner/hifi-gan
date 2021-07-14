@@ -5,3 +5,5 @@ scipy
 tensorboard
 soundfile
 matplotlib
+numba
+torchsummary
