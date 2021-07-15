@@ -124,6 +124,7 @@ def train(rank, a, h):
                                           h.fmin, h.fmax_for_loss)
 
             y_g_hat = generator(y)
+
             y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate, h.hop_size,
                                           h.win_size,
                                           h.fmin, h.fmax_for_loss)
@@ -146,8 +147,10 @@ def train(rank, a, h):
             # Generator
             optim_g.zero_grad()
 
+            wave_loss = F.l1_loss(y, y_g_hat) * 350
+
             # L1 Mel-Spectrogram Loss
-            loss_mel = F.l1_loss(y_mel, y_g_hat_mel) * 45
+            loss_mel = F.l1_loss(y_mel, y_g_hat_mel) * 10
 
             y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = mpd(y, y_g_hat)
             y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y, y_g_hat)
@@ -155,7 +158,9 @@ def train(rank, a, h):
             loss_fm_s = feature_loss(fmap_s_r, fmap_s_g)
             loss_gen_f, losses_gen_f = generator_loss(y_df_hat_g)
             loss_gen_s, losses_gen_s = generator_loss(y_ds_hat_g)
-            loss_gen_all = loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel
+            loss_adv = (loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f)*0.0001
+            loss_recon = (loss_mel + wave_loss)*10
+            loss_gen_all = loss_adv + loss_recon
 
             loss_gen_all.backward()
             optim_g.step()
@@ -165,9 +170,11 @@ def train(rank, a, h):
                 if steps % a.stdout_interval == 0:
                     with torch.no_grad():
                         mel_error = F.l1_loss(y_mel, y_g_hat_mel).item()
+                        wave_error = F.l1_loss(y, y_g_hat).item()
 
-                    print('Steps : {:d}, Gen Loss Total : {:4.3f}, Mel-Spec. Error : {:4.3f}, s/b : {:4.3f}'.
-                          format(steps, loss_gen_all, mel_error, time.time() - start_b))
+                    print('Steps : {:d}, Gen Loss Total : {:4.3f}, Mel-Spec Error : {:4.3f}, '
+                          'Wave Error : {:4.3f}, s/b : {:4.3f}'.
+                          format(steps, loss_gen_all, mel_error, wave_error, time.time() - start_b))
 
                 # checkpointing
                 if steps % a.checkpoint_interval == 0 and steps != 0:
@@ -187,12 +194,14 @@ def train(rank, a, h):
                 if steps % a.summary_interval == 0:
                     sw.add_scalar("training/gen_loss_total", loss_gen_all, steps)
                     sw.add_scalar("training/mel_spec_error", mel_error, steps)
+                    sw.add_scalar("training/wave_error", wave_error, steps)
 
                 # Validation
                 if steps % a.validation_interval == 0:  # and steps != 0:
                     generator.eval()
                     torch.cuda.empty_cache()
-                    val_err_tot = 0
+                    wave_err_tot = 0
+                    mel_err_tot = 0
                     with torch.no_grad():
                         for j, batch in enumerate(validation_loader):
                             y, _ = batch
@@ -204,7 +213,8 @@ def train(rank, a, h):
                             y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate,
                                                           h.hop_size, h.win_size,
                                                           h.fmin, h.fmax_for_loss)
-                            val_err_tot += F.l1_loss(y_mel, y_g_hat_mel).item()
+                            wave_err_tot += F.l1_loss(y, y_g_hat).item()
+                            mel_err_tot += F.l1_loss(y_mel, y_g_hat_mel).item()
 
                             if j <= 4:
                                 if steps == 0:
@@ -218,8 +228,10 @@ def train(rank, a, h):
                                 sw.add_figure('generated/y_hat_spec_{}'.format(j),
                                               plot_spectrogram(y_hat_spec.squeeze(0).cpu().numpy()), steps)
 
-                        val_err = val_err_tot / (j + 1)
-                        sw.add_scalar("validation/mel_spec_error", val_err, steps)
+                        wave_err = wave_err_tot / (j + 1)
+                        sw.add_scalar("validation/wave_error", wave_err, steps)
+                        mel_err = mel_err_tot / (j + 1)
+                        sw.add_scalar("validation/mel_spec_error", mel_err, steps)
 
                     generator.train()
 

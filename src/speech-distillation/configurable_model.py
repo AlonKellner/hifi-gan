@@ -28,8 +28,9 @@ def get_block_from_config(block_config):
             return layer
         elif block_name == "trans":
             chin, chout, kernel, stride = block_parameters
+            padding, output_padding = get_padding_trans(kernel, stride=stride, dilation=1)
             layer = weight_norm(ConvTranspose1d(chin, chout, kernel, stride,
-                                                padding=get_padding_trans(kernel, stride=stride, dilation=1)))
+                                                padding=padding, output_padding=output_padding))
             layer.apply(init_weights)
             return layer
         elif block_name == "res_fusion":
