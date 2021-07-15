@@ -17,11 +17,12 @@ from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from src.env import AttrDict, build_env
 from src.meldataset import mel_spectrogram, get_dataset_filelist
-from src.models import Generator, MultiPeriodDiscriminator, MultiScaleDiscriminator, feature_loss, generator_loss, \
+from src.models import Generator, MultiScaleDiscriminator, feature_loss, generator_loss, \
     discriminator_loss
+from discriminators import MultiPeriodDiscriminator
 from src.utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint
 from generator import Generator
-from static_configs import get_static_generator_config
+from static_configs import get_static_generator_config, get_static_periods_config
 from datasets import WaveDataset
 from torchsummary import summary
 
@@ -38,7 +39,7 @@ def train(rank, a, h):
 
     generator = Generator(get_static_generator_config()).to(device)
     print(summary(generator, input_size=(1, 8192)))
-    mpd = MultiPeriodDiscriminator().to(device)
+    mpd = MultiPeriodDiscriminator(get_static_periods_config()).to(device)
     msd = MultiScaleDiscriminator().to(device)
 
     if rank == 0:
@@ -213,7 +214,7 @@ def train(rank, a, h):
                             y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate,
                                                           h.hop_size, h.win_size,
                                                           h.fmin, h.fmax_for_loss)
-                            wave_err_tot += F.l1_loss(y, y_g_hat).item()
+                            wave_err_tot += F.l1_loss(y.unsqueeze(1), y_g_hat).item()
                             mel_err_tot += F.l1_loss(y_mel, y_g_hat_mel).item()
 
                             if j <= 4:

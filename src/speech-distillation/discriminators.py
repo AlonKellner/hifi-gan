@@ -1,22 +1,47 @@
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
-from torch.nn import Conv1d, ConvTranspose1d, AvgPool1d, Conv2d
-from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
-from src.utils import init_weights, get_padding
-from src.models import ResBlock1, ResBlock2, DiscriminatorP, DiscriminatorS
+import torch.nn.functional as F
+from torch.nn import AvgPool1d
+
+from configurable_model import get_modules_from_config, get_module_from_config
+
+LRELU_SLOPE = 0.1
+
+
+class DiscriminatorP(torch.nn.Module):
+    def __init__(self, period, layers_config):
+        super(DiscriminatorP, self).__init__()
+        self.period = period
+        self.convs = nn.ModuleList(get_modules_from_config(layers_config[:-1]))
+        self.conv_post = get_module_from_config(layers_config[-1])
+
+    def forward(self, x):
+        fmap = []
+
+        # 1d to 2d
+        b, c, t = x.shape
+        if t % self.period != 0: # pad first
+            n_pad = self.period - (t % self.period)
+            x = F.pad(x, (0, n_pad), "reflect")
+            t = t + n_pad
+        x = x.view(b, c, t // self.period, self.period)
+
+        for l in self.convs:
+            x = l(x)
+            x = F.leaky_relu(x, LRELU_SLOPE)
+            fmap.append(x)
+        x = self.conv_post(x)
+        fmap.append(x)
+        x = torch.flatten(x, 1, -1)
+
+        return x, fmap
 
 
 class MultiPeriodDiscriminator(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, discriminator_configs):
         super(MultiPeriodDiscriminator, self).__init__()
         self.discriminators = nn.ModuleList([
-            DiscriminatorP(1),
-            DiscriminatorP(2),
-            DiscriminatorP(3),
-            DiscriminatorP(5),
-            DiscriminatorP(8),
-            DiscriminatorP(13),
+            DiscriminatorP(period, layers_config) for period, layers_config in discriminator_configs
         ])
 
     def forward(self, y, y_hat):
@@ -35,13 +60,31 @@ class MultiPeriodDiscriminator(torch.nn.Module):
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
 
+class DiscriminatorS(torch.nn.Module):
+    def __init__(self, layers_config):
+        super(DiscriminatorS, self).__init__()
+
+        self.convs = nn.ModuleList(get_modules_from_config(layers_config[:-1]))
+        self.conv_post = get_module_from_config(layers_config[-1])
+
+    def forward(self, x):
+        fmap = []
+        for l in self.convs:
+            x = l(x)
+            x = F.leaky_relu(x, LRELU_SLOPE)
+            fmap.append(x)
+        x = self.conv_post(x)
+        fmap.append(x)
+        x = torch.flatten(x, 1, -1)
+
+        return x, fmap
+
+
 class MultiScaleDiscriminator(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, discriminator_configs):
         super(MultiScaleDiscriminator, self).__init__()
         self.discriminators = nn.ModuleList([
-            DiscriminatorS(use_spectral_norm=True),
-            DiscriminatorS(),
-            DiscriminatorS(),
+            DiscriminatorS(layers_config) for layers_config in discriminator_configs
         ])
         self.meanpools = nn.ModuleList([
             AvgPool1d(4, 2, padding=2),
