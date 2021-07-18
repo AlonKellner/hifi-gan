@@ -8,7 +8,7 @@ import os
 import torch
 from scipy.io.wavfile import write
 
-from extra_utils import remove_module_weight_norms
+from remove_norm import remove_module_weight_norms
 from generator import Generator
 from src.env import AttrDict
 from src.meldataset import MAX_WAV_VALUE, load_wav
@@ -50,7 +50,7 @@ def inference(a, h):
             wav, sr = load_wav(os.path.join(a.input_wavs_dir, filename))
             wav = wav / MAX_WAV_VALUE
             wav = torch.FloatTensor(wav).to(device)
-            y_g_hat = generator(wav.unsqueeze(0))
+            y_g_hat = generator(wav.unsqueeze(0).unsqueeze(0))
             audio = y_g_hat.squeeze()
             audio = audio * MAX_WAV_VALUE
             audio = audio.cpu().numpy().astype('int16')
