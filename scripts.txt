@@ -7,7 +7,16 @@ sudo nvidia-docker run \
 -e NVIDIA_VISIBLE_DEVICES=all \
 -v /home/alonkellner/projects/speech-distillation/datasets/:/datasets \
 -v /home/alonkellner/projects/speech-distillation/models/mount:/mount \
-539e4ebe91db
+XXXXXXXXX
+
+sudo nvidia-docker run \
+--gpus all \
+--runtime=nvidia \
+-e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+-e NVIDIA_VISIBLE_DEVICES=all \
+-v /home/alonkellner/projects/speech-distillation/datasets/ljspeech/LJSpeech-1.1/test:/wavs \
+-v /home/alonkellner/projects/speech-distillation/models/mount:/mount \
+XXXXXXXXX
 
 sudo docker build . --file inference_autoencoding.Dockerfile
 
