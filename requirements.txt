@@ -1,8 +1,9 @@
 torch
-numpy==1.17.4
+numpy
 librosa
 scipy
 tensorboard
 soundfile
 matplotlib
-numba==0.48
+numba
+torchsummary
