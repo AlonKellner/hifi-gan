@@ -6,4 +6,3 @@ tensorboard
 soundfile
 matplotlib
 numba
-torchsummary

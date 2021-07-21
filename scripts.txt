@@ -1,5 +1,7 @@
 cd /home/alonkellner/projects/speech-distillation/models/hifi-gan/
 
+sudo docker build .
+
 sudo nvidia-docker run \
 --gpus all \
 --runtime=nvidia \
@@ -9,17 +11,10 @@ sudo nvidia-docker run \
 -v /home/alonkellner/projects/speech-distillation/models/mount:/mount \
 XXXXXXXXX
 
-sudo nvidia-docker run \
---gpus all \
---runtime=nvidia \
--e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
--e NVIDIA_VISIBLE_DEVICES=all \
--v /home/alonkellner/projects/speech-distillation/datasets/ljspeech/LJSpeech-1.1/test:/wavs \
--v /home/alonkellner/projects/speech-distillation/models/mount:/mount \
-XXXXXXXXX
-
-sudo docker build . --file inference_autoencoding.Dockerfile
-
 sudo docker run -d -p 6006:6006 \
 -v /home/alonkellner/projects/speech-distillation/models/mount/logs:/logs \
 volnet/tensorflow-tensorboard
+
+sudo docker build . --file inference_autoencoding.Dockerfile
+
+sudo docker build . --file test.Dockerfile

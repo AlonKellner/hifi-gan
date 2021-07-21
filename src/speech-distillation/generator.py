@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from configurable_model import ConfigurableModel
+from configurable_module import ConfigurableModule
 
 LRELU_SLOPE = 0.1
 
@@ -23,14 +23,12 @@ class Encoder(torch.nn.Module):
     def __init__(self, encoder_config):
         super(Encoder, self).__init__()
         vo_encoder_config, splitters_configs = encoder_config
-        self.vo_encoder = ConfigurableModel(vo_encoder_config)
-        self.splitters = nn.ModuleList([
-            ConfigurableModel(splitter_config) for splitter_config in splitters_configs
-        ])
+        self.vo_encoder = ConfigurableModule(vo_encoder_config)
+        self.splitters = nn.ModuleList(list(map(ConfigurableModule, splitters_configs)))
 
     def forward(self, wave):
         e = self.vo_encoder(wave)
-        split_e = torch.stack([splitter(e) for splitter in self.splitters], dim=0)
+        split_e = [splitter(e) for splitter in self.splitters]
         return split_e
 
 
@@ -38,14 +36,12 @@ class Decoder(torch.nn.Module):
     def __init__(self, decoder_config):
         super(Decoder, self).__init__()
         mergers_configs, vo_decoder_config = decoder_config
-        self.mergers = nn.ModuleList([
-            ConfigurableModel(merger_config) for merger_config in mergers_configs
-        ])
-        self.vo_decoder = ConfigurableModel(vo_decoder_config)
+        self.mergers = nn.ModuleList(list(map(ConfigurableModule, mergers_configs)))
+        self.vo_decoder = ConfigurableModule(vo_decoder_config)
 
     def forward(self, split_e):
-        split_e = [merger(single_e.squeeze(dim=0)) for merger, single_e in
-                   zip(self.mergers, split_e.split(1, dim=0))]
+        split_e = [merger(single_e) for merger, single_e in
+                   zip(self.mergers, split_e)]
         e = torch.stack(split_e, dim=0).sum(dim=0)
         wave = self.vo_decoder(e)
         return wave

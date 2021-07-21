@@ -17,12 +17,14 @@ from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from src.env import AttrDict, build_env
 from src.meldataset import mel_spectrogram, get_dataset_filelist
-from src.models import Generator, MultiScaleDiscriminator, feature_loss, generator_loss, \
-    discriminator_loss
-from discriminators import MultiPeriodDiscriminator
+from src.models import feature_loss, generator_loss, discriminator_loss
 from src.utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint
+
 from generator import Generator
-from static_configs import get_static_generator_config, get_static_periods_config
+from discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator
+from static_configs import get_static_generator_config, \
+    get_static_scale_discriminators_config, \
+    get_static_period_discriminators_config
 from datasets import WaveDataset
 from torchsummary import summary
 
@@ -38,9 +40,11 @@ def train(rank, a, h):
     device = torch.device('cuda:{:d}'.format(rank))
 
     generator = Generator(get_static_generator_config()).to(device)
-    print(summary(generator, input_size=(1, 8192)))
-    mpd = MultiPeriodDiscriminator(get_static_periods_config()).to(device)
-    msd = MultiScaleDiscriminator().to(device)
+    summary(generator, input_size=(1, h.segment_size), batch_size=h.batch_size)
+    # mpd = MultiPeriodDiscriminator(get_static_period_discriminators_config()).to(device)
+    # summary(mpd, input_size=[(1, h.segment_size), (1, h.segment_size)], batch_size=h.batch_size)
+    # msd = MultiScaleDiscriminator(get_static_scale_discriminators_config()).to(device)
+    # summary(msd, input_size=[(1, h.segment_size), (1, h.segment_size)], batch_size=h.batch_size)
 
     if rank == 0:
         os.makedirs(a.checkpoint_path, exist_ok=True)
@@ -48,36 +52,38 @@ def train(rank, a, h):
 
     if os.path.isdir(a.checkpoint_path):
         cp_g = scan_checkpoint(a.checkpoint_path, 'g_')
-        cp_do = scan_checkpoint(a.checkpoint_path, 'do_')
+        # cp_do = scan_checkpoint(a.checkpoint_path, 'do_')
 
     steps = 0
-    if cp_g is None or cp_do is None:
+    if cp_g is None:  # or cp_do is None:
         state_dict_do = None
         last_epoch = -1
     else:
         state_dict_g = load_checkpoint(cp_g, device)
-        state_dict_do = load_checkpoint(cp_do, device)
+        # state_dict_do = load_checkpoint(cp_do, device)
         generator.load_state_dict(state_dict_g['generator'])
-        mpd.load_state_dict(state_dict_do['mpd'])
-        msd.load_state_dict(state_dict_do['msd'])
-        steps = state_dict_do['steps'] + 1
-        last_epoch = state_dict_do['epoch']
+        # mpd.load_state_dict(state_dict_do['mpd'])
+        # msd.load_state_dict(state_dict_do['msd'])
+        # steps = state_dict_do['steps'] + 1
+        # last_epoch = state_dict_do['epoch']
 
     if h.num_gpus > 1:
         generator = DistributedDataParallel(generator, device_ids=[rank]).to(device)
-        mpd = DistributedDataParallel(mpd, device_ids=[rank]).to(device)
-        msd = DistributedDataParallel(msd, device_ids=[rank]).to(device)
+        # mpd = DistributedDataParallel(mpd, device_ids=[rank]).to(device)
+        # msd = DistributedDataParallel(msd, device_ids=[rank]).to(device)
+
+    accumulation_steps = h.accumulated_batch_size / h.batch_size
 
     optim_g = torch.optim.AdamW(generator.parameters(), h.learning_rate, betas=(h.adam_b1, h.adam_b2))
-    optim_d = torch.optim.AdamW(itertools.chain(msd.parameters(), mpd.parameters()),
-                                h.learning_rate, betas=(h.adam_b1, h.adam_b2))
+    # optim_d = torch.optim.AdamW(itertools.chain(msd.parameters(), mpd.parameters()),
+    #                             h.learning_rate, betas=(h.adam_b1, h.adam_b2))
 
     if state_dict_do is not None:
         optim_g.load_state_dict(state_dict_do['optim_g'])
-        optim_d.load_state_dict(state_dict_do['optim_d'])
+        # optim_d.load_state_dict(state_dict_do['optim_d'])
 
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=h.lr_decay, last_epoch=last_epoch)
-    scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=h.lr_decay, last_epoch=last_epoch)
+    # scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=h.lr_decay, last_epoch=last_epoch)
 
     training_filelist, validation_filelist = get_dataset_filelist(a)
 
@@ -93,8 +99,8 @@ def train(rank, a, h):
                               drop_last=True)
 
     if rank == 0:
-        validset = WaveDataset(validation_filelist, h.segment_size, h.sampling_rate, False, n_cache_reuse=0,
-                               fine_tuning=a.fine_tuning)
+        validset = WaveDataset(validation_filelist, h.validation_segment_size, h.sampling_rate, False, n_cache_reuse=0,
+                               fine_tuning=a.fine_tuning, deterministic=True)
         validation_loader = DataLoader(validset, num_workers=1, shuffle=False,
                                        sampler=None,
                                        batch_size=1,
@@ -104,8 +110,8 @@ def train(rank, a, h):
         sw = SummaryWriter(os.path.join(a.checkpoint_path, 'logs'))
 
     generator.train()
-    mpd.train()
-    msd.train()
+    # mpd.train()
+    # msd.train()
     for epoch in range(max(0, last_epoch), a.training_epochs):
         if rank == 0:
             start = time.time()
@@ -130,41 +136,42 @@ def train(rank, a, h):
                                           h.win_size,
                                           h.fmin, h.fmax_for_loss)
 
-            optim_d.zero_grad()
-
-            # MPD
-            y_df_hat_r, y_df_hat_g, _, _ = mpd(y, y_g_hat.detach())
-            loss_disc_f, losses_disc_f_r, losses_disc_f_g = discriminator_loss(y_df_hat_r, y_df_hat_g)
-
-            # MSD
-            y_ds_hat_r, y_ds_hat_g, _, _ = msd(y, y_g_hat.detach())
-            loss_disc_s, losses_disc_s_r, losses_disc_s_g = discriminator_loss(y_ds_hat_r, y_ds_hat_g)
-
-            loss_disc_all = loss_disc_s + loss_disc_f
-
-            loss_disc_all.backward()
-            optim_d.step()
+            # optim_d.zero_grad()
+            #
+            # # MPD
+            # y_df_hat_r, y_df_hat_g, _, _ = mpd(y, y_g_hat.detach())
+            # loss_disc_f, losses_disc_f_r, losses_disc_f_g = discriminator_loss(y_df_hat_r, y_df_hat_g)
+            #
+            # # MSD
+            # y_ds_hat_r, y_ds_hat_g, _, _ = msd(y, y_g_hat.detach())
+            # loss_disc_s, losses_disc_s_r, losses_disc_s_g = discriminator_loss(y_ds_hat_r, y_ds_hat_g)
+            #
+            # loss_disc_all = loss_disc_s + loss_disc_f
+            #
+            # loss_disc_all.backward()
+            # optim_d.step()
 
             # Generator
-            optim_g.zero_grad()
 
             wave_loss = F.l1_loss(y, y_g_hat) * 350
 
             # L1 Mel-Spectrogram Loss
             loss_mel = F.l1_loss(y_mel, y_g_hat_mel) * 10
 
-            y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = mpd(y, y_g_hat)
-            y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y, y_g_hat)
-            loss_fm_f = feature_loss(fmap_f_r, fmap_f_g)
-            loss_fm_s = feature_loss(fmap_s_r, fmap_s_g)
-            loss_gen_f, losses_gen_f = generator_loss(y_df_hat_g)
-            loss_gen_s, losses_gen_s = generator_loss(y_ds_hat_g)
-            loss_adv = (loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f)*0.0001
+            # y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = mpd(y, y_g_hat)
+            # y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y, y_g_hat)
+            # loss_fm_f = feature_loss(fmap_f_r, fmap_f_g)
+            # loss_fm_s = feature_loss(fmap_s_r, fmap_s_g)
+            # loss_gen_f, losses_gen_f = generator_loss(y_df_hat_g)
+            # loss_gen_s, losses_gen_s = generator_loss(y_ds_hat_g)
+            # loss_adv = (loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f)*0.0001
             loss_recon = (loss_mel + wave_loss)*10
-            loss_gen_all = loss_adv + loss_recon
+            loss_gen_all = loss_recon  # + loss_adv
 
             loss_gen_all.backward()
-            optim_g.step()
+            if i % accumulation_steps == 0:
+                optim_g.step()
+                optim_g.zero_grad()
 
             if rank == 0:
                 # STDOUT logging
@@ -184,12 +191,15 @@ def train(rank, a, h):
                                     {'generator': (generator.module if h.num_gpus > 1 else generator).state_dict()})
                     checkpoint_path = "{}/do_{:08d}".format(a.checkpoint_path, steps)
                     save_checkpoint(checkpoint_path,
-                                    {'mpd': (mpd.module if h.num_gpus > 1
-                                             else mpd).state_dict(),
-                                     'msd': (msd.module if h.num_gpus > 1
-                                             else msd).state_dict(),
-                                     'optim_g': optim_g.state_dict(), 'optim_d': optim_d.state_dict(), 'steps': steps,
-                                     'epoch': epoch})
+                                    {
+                                        # 'mpd': (mpd.module if h.num_gpus > 1
+                                        #      else mpd).state_dict(),
+                                        # 'msd': (msd.module if h.num_gpus > 1
+                                        #      else msd).state_dict(),
+                                        'optim_g': optim_g.state_dict(),
+                                        # 'optim_d': optim_d.state_dict(), 'steps': steps,
+                                        'epoch': epoch
+                                    })
 
                 # Tensorboard summary logging
                 if steps % a.summary_interval == 0:
@@ -239,7 +249,7 @@ def train(rank, a, h):
             steps += 1
 
         scheduler_g.step()
-        scheduler_d.step()
+        # scheduler_d.step()
 
         if rank == 0:
             print('Time taken for epoch {} is {} sec\n'.format(epoch + 1, int(time.time() - start)))

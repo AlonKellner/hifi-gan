@@ -11,7 +11,7 @@ MAX_WAV_VALUE = 32768.0
 
 class WaveDataset(torch.utils.data.Dataset):
     def __init__(self, training_files, segment_size, sampling_rate, split=True, n_cache_reuse=1,
-                 fine_tuning=False):
+                 fine_tuning=False, deterministic=False):
         self.audio_files = training_files
         self.segment_size = segment_size
         self.sampling_rate = sampling_rate
@@ -19,6 +19,7 @@ class WaveDataset(torch.utils.data.Dataset):
         self.n_cache_reuse = n_cache_reuse
         self.fine_tuning = fine_tuning
         self._cache_ref_count = 0
+        self.deterministic = deterministic
 
     def __getitem__(self, index):
         filename = self.audio_files[index]
@@ -41,7 +42,7 @@ class WaveDataset(torch.utils.data.Dataset):
 
         if audio.size(1) >= self.segment_size:
             max_audio_start = audio.size(1) - self.segment_size
-            audio_start = random.randint(0, max_audio_start)
+            audio_start = 0 if self.deterministic else random.randint(0, max_audio_start)
             audio = audio[:, audio_start:audio_start+self.segment_size]
         else:
             audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.size(1)), 'constant')
