@@ -1,0 +1,5 @@
+.git
+.idea
+**/__pycache__
+*.png
+LJSpeech-1.1
