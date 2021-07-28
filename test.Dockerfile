@@ -6,7 +6,7 @@ WORKDIR app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-ENV VER=0.0.7
+ENV VER=0.1.5
 
 RUN pip install git+https://github.com/AlonKellner/pytorch-summary
 

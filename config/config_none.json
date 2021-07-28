@@ -1,21 +1,21 @@
 {
     "num_gpus": 0,
-    "batch_size": 2,
+    "batch_size": 1,
     "learning_rate": 0.0002,
     "adam_b1": 0.8,
     "adam_b2": 0.99,
     "lr_decay": 0.999,
-    "accumulated_batch_size": 10,
+    "accumulated_batch_size": 5,
     "seed": 1234,
 
-    "segment_size": 10920,
+    "segment_size": 43680,
     "num_mels": 80,
     "num_freq": 1025,
     "n_fft": 1024,
     "hop_size": 256,
     "win_size": 1024,
 
-    "validation_segment_size": 10920,
+    "validation_segment_size": 109200,
 
     "fmin": 0,
     "fmax": 8000,
@@ -23,7 +23,7 @@
 
     "sampling_rate": 22050,
 
-    "num_workers": 2,
+    "num_workers": 4,
 
     "dist_config": {
         "dist_backend": "nccl",

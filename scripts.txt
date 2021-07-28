@@ -1,4 +1,5 @@
 cd /home/alonkellner/projects/speech-distillation/models/hifi-gan/
+cd /home/alonkellner/projects/speech-distillation/models/mount/
 
 sudo docker build .
 

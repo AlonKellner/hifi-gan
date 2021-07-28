@@ -1,17 +1,16 @@
 import torch
 import torch.nn as nn
 
-from configurable_module import ConfigurableModule
+from configurable_module import get_module_from_config
 
 LRELU_SLOPE = 0.1
 
 
 class Generator(torch.nn.Module):
-    def __init__(self, generator_config):
+    def __init__(self, encoder, decoder):
         super(Generator, self).__init__()
-        encoder_config, decoder_config = generator_config
-        self.encoder = Encoder(encoder_config)
-        self.decoder = Decoder(decoder_config)
+        self.encoder = encoder
+        self.decoder = decoder
 
     def forward(self, wave):
         split_e = self.encoder(wave)
@@ -20,11 +19,10 @@ class Generator(torch.nn.Module):
 
 
 class Encoder(torch.nn.Module):
-    def __init__(self, encoder_config):
+    def __init__(self, vo_encoder, splitters):
         super(Encoder, self).__init__()
-        vo_encoder_config, splitters_configs = encoder_config
-        self.vo_encoder = ConfigurableModule(vo_encoder_config)
-        self.splitters = nn.ModuleList(list(map(ConfigurableModule, splitters_configs)))
+        self.vo_encoder = vo_encoder
+        self.splitters = splitters
 
     def forward(self, wave):
         e = self.vo_encoder(wave)
@@ -33,11 +31,10 @@ class Encoder(torch.nn.Module):
 
 
 class Decoder(torch.nn.Module):
-    def __init__(self, decoder_config):
+    def __init__(self, mergers, vo_decoder):
         super(Decoder, self).__init__()
-        mergers_configs, vo_decoder_config = decoder_config
-        self.mergers = nn.ModuleList(list(map(ConfigurableModule, mergers_configs)))
-        self.vo_decoder = ConfigurableModule(vo_decoder_config)
+        self.mergers = mergers
+        self.vo_decoder = vo_decoder
 
     def forward(self, split_e):
         split_e = [merger(single_e) for merger, single_e in

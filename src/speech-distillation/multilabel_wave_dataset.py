@@ -9,7 +9,7 @@ from src.meldataset import load_wav
 MAX_WAV_VALUE = 32768.0
 
 
-class WaveDataset(torch.utils.data.Dataset):
+class MultilabelWaveDataset(torch.utils.data.Dataset):
     def __init__(self, training_files, segment_size, sampling_rate, split=True, n_cache_reuse=1,
                  fine_tuning=False, deterministic=False):
         self.audio_files = training_files
