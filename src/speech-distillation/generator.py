@@ -1,21 +1,7 @@
 import torch
 import torch.nn as nn
 
-from configurable_module import get_module_from_config
-
 LRELU_SLOPE = 0.1
-
-
-class Generator(torch.nn.Module):
-    def __init__(self, encoder, decoder):
-        super(Generator, self).__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-
-    def forward(self, wave):
-        split_e = self.encoder(wave)
-        wave = self.decoder(split_e)
-        return wave
 
 
 class Encoder(torch.nn.Module):

@@ -1,0 +1,75 @@
+[
+  {
+    "group-name": "speakers",
+    "sources": [
+      {
+        "type": "csv",
+        "skiprows": 12,
+        "delimiter": "|",
+        "path": "**/LibriSpeech/SPEAKERS.TXT"
+      }
+    ],
+    "enrichments": [
+      {
+        "type": "rename",
+        "mapping": {
+          "SEX": "sex",
+          "NAME": "speaker",
+          "ID": "speaker-id"
+        }
+      },
+      {
+        "type": "select",
+        "labels": [
+          "sex",
+          "speaker",
+          "speaker-id"
+        ]
+      }
+    ]
+  },
+  {
+    "group-name": "wavs",
+    "sources": [
+      {
+        "type": "glob",
+        "glob": "**/*.wav",
+        "label": "filename"
+      }
+    ],
+    "enrichments": [
+      {
+        "type": "regex",
+        "patterns": {
+          "filename": ".*\/libriadapt\/(?P<dataset>[^\/]+)\/(?P<accent>[^\/]+)\/(?P<noise-type>[^\/]+)\/(?P<mic-brand>[^\/]+)\/train\/(?P<speaker-id>[^-]+)-(?P<book-id>[^-]+)-(?P<sentence-id>[^-]+).wav"
+        }
+      },
+      {
+        "type": "files",
+        "labels": {
+          "reference_wav": "**/LibriSpeech/LibriSpeech/{dataset}/{speaker-id}/{book-id}/{speaker-id}-{book-id}-{sentence-id}.wav",
+          "wav": "**/libriadapt/{dataset}/{accent}/{noise-type}/{mic-brand}/train/{speaker-id}-{book-id}-{sentence-id}.wav",
+          "textgrid": "**/libriadapt_alignments/{dataset}/{speaker-id}-{book-id}-{sentence-id}.TextGrid"
+        }
+      },
+      {
+        "type": "join",
+        "other-group-name": "speakers",
+        "base-label": "speaker-id",
+        "other-label": "speaker-id"
+      },
+      {
+        "type": "select",
+        "labels": [
+          "wav",
+          "textgrid",
+          "accent",
+          "noise-type",
+          "mic-brand",
+          "speaker",
+          "sex"
+        ]
+      }
+    ]
+  }
+]

@@ -220,7 +220,7 @@ def train(rank, a, h):
                         for j, batch in enumerate(validation_loader):
                             y, _ = batch
                             y = y.to(device)
-                            y_generated = generator(y.unsqueeze(1))
+                            y_generated = generator(y.unsqueeze(0))
                             y_diff = y - y_generated
                             reconstruction_loss, mel_loss, wave_loss, y_mel, y_generated_mel = \
                                 get_reconstruction_loss(y, y_generated, h)

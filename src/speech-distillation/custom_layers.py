@@ -33,6 +33,19 @@ class Conv1dRechanneled(nn.Conv1d):
             .transpose(1, 2)
 
 
+class GroupShuffle1d(nn.Module):
+    def __init__(self, groups):
+        self.groups = groups
+        super(GroupShuffle1d, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        batch_size, channels, length = input.size()
+        return input\
+            .reshape(batch_size, self.groups, channels//self.groups, -1)\
+            .transpose(1, 2)\
+            .reshape(batch_size, channels, -1)
+
+
 class Period1d(nn.Module):
     def __init__(self, period, padding_mode='constant', padding_value=0):
         self.period = period

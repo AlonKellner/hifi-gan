@@ -5,10 +5,10 @@
     "adam_b1": 0.8,
     "adam_b2": 0.99,
     "lr_decay": 0.999,
-    "accumulated_batch_size": 5,
+    "accumulated_batch_size": 10,
     "seed": 1234,
 
-    "segment_size": 43680,
+    "segment_size": 21840,
     "num_mels": 80,
     "num_freq": 1025,
     "n_fft": 1024,

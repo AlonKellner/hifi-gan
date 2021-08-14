@@ -6,11 +6,11 @@ from torch.nn.utils import weight_norm, spectral_norm
 from src.utils import init_weights
 
 from extra_utils import get_padding, get_padding_trans
-from custom_layers import Conv1dRechanneled, Period1d, MelSpectrogram, AvgPool1dDilated
+from custom_layers import Conv1dRechanneled, Period1d, MelSpectrogram, AvgPool1dDilated, GroupShuffle1d
 from custom_blocks import ResBlock, FusionBlock, FeatureBlock, ProcessedFeatureBlock, SumBlock, SubResBlock
 from custom_discriminator import AllInOneBlock, AllInOneDiscriminator
 from ensemble import Ensemble
-from generator import Generator, Encoder, Decoder
+from generator import Encoder, Decoder
 
 
 def get_module_from_config(module_config, should_tag=False):
@@ -54,6 +54,21 @@ def get_with_params_module_from_config(module_name, module_parameters, should_ta
                    )
         )
         module.apply(init_weights)
+    elif module_name == 'conv_shuffle':
+        chin, chout, kernel, stride, dilation, groups, norm = process_conv_shuffle_params(*module_parameters)
+        if groups == 1:
+            module = get_module_from_config(
+                ('conv', (chin, chout, kernel, stride, dilation, groups))
+            )
+        else:
+            module = get_module_from_config(
+                [
+                    ('conv', (chin, chout, kernel, stride, dilation, groups)),
+                    ('shuffle', groups),
+                    ('conv', (chout, chout, 1, 1, 1, chout // groups))
+                ]
+            )
+        module.apply(init_weights)
     elif module_name == 'conv_rech':
         chin, chout, kernel, stride, dilation, groups, norm = process_conv_params(*module_parameters)
         module = norm(
@@ -92,6 +107,21 @@ def get_with_params_module_from_config(module_name, module_parameters, should_ta
                             )
         )
         module.apply(init_weights)
+    elif module_name == 'trans_shuffle':
+        chin, chout, kernel, stride, dilation, groups, norm = process_conv_shuffle_params(*module_parameters)
+        if groups == 1:
+            module = get_module_from_config(
+                ('trans', (chin, chout, kernel, stride, dilation, groups))
+            )
+        else:
+            module = get_module_from_config(
+                [
+                    ('conv', (chin, chin, 1, 1, 1, chin // groups)),
+                    ('shuffle', groups),
+                    ('trans', (chin, chout, kernel, stride, dilation, groups))
+                ]
+            )
+        module.apply(init_weights)
     elif module_name == 'trans2':
         chin, chout, kernel, stride, dilation, groups, norm = process_conv_params(*module_parameters)
         padding, output_padding = get_padding_trans(kernel, stride=stride, dilation=(1, 1))
@@ -124,6 +154,9 @@ def get_with_params_module_from_config(module_name, module_parameters, should_ta
         module = Period1d(period=period,
                           padding_mode=padding_mode,
                           padding_value=padding_value)
+    elif module_name == 'shuffle':
+        groups = module_parameters
+        module = GroupShuffle1d(groups=groups)
     elif module_name == 'mel':
         module = MelSpectrogram(*module_parameters)
     elif module_name == 'fusion':
@@ -197,11 +230,6 @@ def get_with_params_module_from_config(module_name, module_parameters, should_ta
         ])
         vo_decoder = get_module_from_config(vo_decoder_config, should_tag=should_tag)
         module = Decoder(mergers, vo_decoder)
-    elif module_name == 'generator':
-        encoder_config, decoder_config = module_parameters
-        encoder = get_module_from_config(encoder_config, should_tag=should_tag)
-        decoder = get_module_from_config(decoder_config, should_tag=should_tag)
-        module = Generator(encoder, decoder)
 
     return module
 
@@ -211,6 +239,10 @@ def process_conv_params(chin, chout, kernel, stride=1, dilation=1, groups=1, nor
     if norm_type == 'spectral':
         norm = spectral_norm
     return chin, chout, kernel, stride, dilation, groups, norm
+
+
+def process_conv_shuffle_params(chin, chout, kernel, stride=1, dilation=1, groups=1, norm_type=None):
+    return chin, chout, kernel, stride, dilation, groups, norm_type
 
 
 def process_period_params(period, padding_mode='constant', padding_value=0):

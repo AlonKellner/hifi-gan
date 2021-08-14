@@ -120,45 +120,61 @@ def get_static_generator_config():
         ('encoder',
          (
              [
-                 ('conv', (1, 16, 25, 1, 1)),
+                 ('conv', (1, 16, 63, 1, 1)),
                  ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(16, 25)),
+                 ('fusion', get_res_block_config(16, 33)),
                  ('lrelu', LRELU_SLOPE),
-                 ('conv', (16, 80, 45, 5, 1)),
+                 ('conv', (16, 48, 33, 3, 1)),
                  ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(80, 15)),
+                 ('fusion', get_res_block_config(48, 21)),
                  ('lrelu', LRELU_SLOPE),
-                 ('conv', (80, 256, 15, 3, 1)),
+                 ('conv', (48, 336, 21, 7, 1)),
                  ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(256, 5)),
+                 ('fusion', get_res_block_config(336, 13, 3)),
+                 ('lrelu', LRELU_SLOPE),
+                 ('conv_shuffle', (336, 4368, 13, 13, 1, 16)),
+                 ('lrelu', LRELU_SLOPE),
+                 ('fusion', get_res_block_config(4368, 3, 56)),
                  ('lrelu', LRELU_SLOPE),
              ],
-             [('conv', (256, 128, 5, 1, 1)), ('conv', (256, 128, 5, 1, 1))]
+             [
+                 ('conv_shuffle', (4368, 2184, 3, 1, 1, 21)),
+                 ('conv_shuffle', (4368, 2184, 3, 1, 1, 21))
+             ]
          )
          ),
         ('decoder',
          (
-             [('conv', (128, 256, 5, 1, 1)), ('conv', (128, 256, 5, 1, 1))],
+             [
+                 ('conv_shuffle', (2184, 4368, 3, 1, 1, 21)),
+                 ('conv_shuffle', (2184, 4368, 3, 1, 1, 21))
+             ],
              [
                  ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(256, 5)),
+                 ('fusion', get_res_block_config(4368, 3, 56)),
                  ('lrelu', LRELU_SLOPE),
-                 ('trans', (256, 80, 15, 3, 1)),
+                 ('trans_shuffle', (4368, 336, 13, 13, 1, 16)),
                  ('sub_res',
-                  ('poold', (45, 1, 3))
+                  ('poold', (31, 1, 13))
                   ),
                  ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(80, 15)),
+                 ('fusion', get_res_block_config(336, 13, 3)),
                  ('lrelu', LRELU_SLOPE),
-                 ('trans', (80, 80, 45, 5, 1)),
+                 ('trans', (336, 48, 21, 7, 1)),
                  ('sub_res',
-                  ('poold', (45, 1, 5))
+                  ('poold', (31, 1, 7))
                   ),
-                 ('conv', (80, 16, 45, 1, 1)),
                  ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(16, 31)),
+                 ('fusion', get_res_block_config(48, 21)),
                  ('lrelu', LRELU_SLOPE),
-                 ('conv', (16, 1, 31, 1, 1)),
+                 ('trans', (48, 16, 33, 3, 1)),
+                 ('sub_res',
+                  ('poold', (31, 1, 3))
+                  ),
+                 ('lrelu', LRELU_SLOPE),
+                 ('fusion', get_res_block_config(16, 33)),
+                 ('lrelu', LRELU_SLOPE),
+                 ('conv', (16, 1, 63, 1, 1)),
                  ('tanh',)
              ]
          )
@@ -167,49 +183,49 @@ def get_static_generator_config():
     return generator_config
 
 
-def get_res_block_config(channel_size, kernel_size):
+def get_res_block_config(channel_size, kernel_size, groups=1):
     common_res_blocks = \
         [
             [
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 1, groups)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
                 ]),
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 2)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 2, groups)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1)),
-                ]),
-            ],
-            [
-                ('res', [
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 2)),
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1)),
-                ]),
-                ('res', [
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 6)),
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
                 ]),
             ],
             [
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 3)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 2, groups)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
                 ]),
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 12)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 6, groups)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+                ]),
+            ],
+            [
+                ('res', [
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 3, groups)),
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+                ]),
+                ('res', [
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 12, groups)),
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
                 ]),
             ],
         ]
