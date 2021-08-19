@@ -46,6 +46,37 @@ class ResBlock(torch.nn.Module):
         return x
 
 
+class SplitterBlock(torch.nn.Module):
+    def __init__(self, splitters):
+        super(SplitterBlock, self).__init__()
+        self.splitters = splitters
+
+    def forward(self, x):
+        split_x = [splitter(x) for splitter in self.splitters]
+        return split_x
+
+
+class MergerBlock(torch.nn.Module):
+    def __init__(self, mergers):
+        super(MergerBlock, self).__init__()
+        self.mergers = mergers
+
+    def forward(self, split_x):
+        split_x = [merger(single_x) for merger, single_x in
+                   zip(self.mergers, split_x)]
+        x = torch.stack(split_x, dim=0).sum(dim=0)
+        return x
+
+
+class ValveBlock(torch.nn.Module):
+    def __init__(self, ratio=1):
+        super(ValveBlock, self).__init__()
+        self.ratio = ratio
+
+    def forward(self, x):
+        return x * self.ratio
+
+
 class SubResBlock(torch.nn.Module):
     def __init__(self, model):
         super(SubResBlock, self).__init__()
@@ -93,3 +124,18 @@ class ProcessedFeatureBlock(FeatureBlock):
             feature_model(feature) for feature_model, feature in zip(self.feature_models, features)
         ]
         return x, processed_features
+
+
+def get_modules(model, module_type, tags_to_find=None):
+    return list(filter(lambda module: is_module_valid(module, module_type, tags_to_find), model.modules()))
+
+
+def is_module_valid(module, module_type, tags_to_find=None):
+    if not isinstance(module, module_type):
+        return False
+    if tags_to_find is None:
+        return True
+    if not hasattr(module, 'tags'):
+        return False
+    tags_were_found = any(tag in tags_to_find for tag in module.tags)
+    return tags_were_found

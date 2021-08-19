@@ -29,5 +29,34 @@
         "dist_backend": "nccl",
         "dist_url": "tcp://localhost:54321",
         "world_size": 1
+    },
+
+    "valves_steps": 10,
+    "valves": {
+        "skip1": {
+            "anti": "noise1",
+            "decay": 0.998,
+            "limit": 5000
+        },
+        "skip2": {
+            "anti": "noise2",
+            "decay": 0.999,
+            "limit": 10000
+        },
+        "skip3": {
+            "anti": "noise3",
+            "decay": 0.9995,
+            "limit": 20000
+        },
+        "skip4": {
+            "anti": "noise4",
+            "decay": 0.9998,
+            "limit": 50000
+        },
+        "skip5": {
+            "anti": "noise5",
+            "decay": 0.9999,
+            "limit": 100000
+        }
     }
 }

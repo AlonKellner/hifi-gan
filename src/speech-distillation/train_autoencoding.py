@@ -15,6 +15,7 @@ from torch.nn.parallel import DistributedDataParallel
 from src.env import AttrDict, build_env
 from src.meldataset import mel_spectrogram, get_dataset_filelist
 from src.utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint
+import math
 
 from torchsummary import summary
 
@@ -23,6 +24,7 @@ from static_configs import get_static_generator_config, \
 from datasets import WaveDataset
 from configurable_module import get_module_from_config
 from custom_losses import feature_loss, one_loss, zero_loss
+from custom_blocks import get_modules, ValveBlock
 
 torch.backends.cudnn.benchmark = True
 
@@ -39,6 +41,15 @@ def train(rank, a, h):
     summary(generator,
             input_size=(1, h.segment_size),
             batch_size=h.batch_size)
+
+    valves_config = h.valves
+    valves_modules = {}
+    for valve_tag, valve_config in valves_config.items():
+        anti_valve_tag = valve_config['anti']
+        valve_modules = get_modules(generator, ValveBlock, [valve_tag])
+        anti_valve_modules = get_modules(generator, ValveBlock, [anti_valve_tag])
+        valves_modules[valve_tag] = (valve_modules, anti_valve_modules)
+
     discriminator = get_module_from_config(get_static_all_in_one_discriminator(8)).to(device)
     summary(discriminator,
             input_size=(1, h.segment_size),
@@ -119,8 +130,9 @@ def train(rank, a, h):
             should_backprop_reconstruction = True
             should_backprop_discrimination = True
             should_backprop_adversarial = True
-            should_step_discriminator = i % accumulation_steps == 0
-            should_step_generator = i % accumulation_steps == 0
+            should_step_discriminator = steps % accumulation_steps == 0
+            should_step_generator = steps % accumulation_steps == 0
+            should_step_valves = steps % h.valves_steps == 0
 
             if rank == 0:
                 start_b = time.time()
@@ -211,7 +223,7 @@ def train(rank, a, h):
                         sw.add_scalar("training_generator/adversarial/fmap", fmap_error, steps)
 
                 # Validation
-                if steps % a.validation_interval == 0:  # and steps != 0:
+                if steps % a.validation_interval == 0: # and steps != 0:
                     generator.eval()
                     torch.cuda.empty_cache()
                     wave_err_tot = 0
@@ -258,6 +270,21 @@ def train(rank, a, h):
                         sw.add_scalar("validation/mel", mel_err, steps)
 
                     generator.train()
+
+            if should_step_valves:
+                for valve_tag, all_valve_modules in valves_modules.items():
+                    valve_modules, anti_valves_modules = all_valve_modules
+                    valve_config = valves_config[valve_tag]
+                    valve_limit = valve_config['limit']
+                    if valve_limit < steps:
+                        pow_decay = 0
+                    else:
+                        valve_decay = valve_config['decay']
+                        pow_decay = math.pow(valve_decay, h.valves_steps)
+                    for valve_module in valve_modules:
+                        valve_module.ratio *= pow_decay
+                    for anti_valve_module in anti_valves_modules:
+                        anti_valve_module.ratio = (1 - (1 - anti_valve_module.ratio) * pow_decay)
 
             steps += 1
 

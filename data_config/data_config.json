@@ -61,6 +61,7 @@
       {
         "type": "select",
         "labels": [
+          "reference_wav",
           "wav",
           "textgrid",
           "accent",

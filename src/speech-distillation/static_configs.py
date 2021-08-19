@@ -115,7 +115,7 @@ def get_all_in_one_block_config(pre_channels, kernel_size, dilation, pre_scale, 
             )
 
 
-def get_static_generator_config():
+def get_static_generator_config_old():
     generator_config = [
         ('encoder',
          (
@@ -181,6 +181,158 @@ def get_static_generator_config():
          )
     ]
     return generator_config
+
+
+def get_static_generator_config(initial_skip_ratio=1):
+    level5 = get_level5_model(initial_skip_ratio)
+    level4 = get_leveln_model(initial_skip_ratio, 'skip4', 'noise4', (336, 13, 13, 16), (4368, 3, 56), 31, level5)
+    level3 = get_leveln_model(initial_skip_ratio, 'skip3', 'noise3', (48, 21, 7, 1), (336, 13, 3), 31, level4)
+    level2 = get_leveln_model(initial_skip_ratio, 'skip2', 'noise2', (16, 33, 3, 1), (48, 21, 1), 31, level3)
+    generator_config = get_level1_model(initial_skip_ratio, level2)
+    return generator_config
+
+
+def get_leveln_model(initial_skip_ratio, skip_tag, anti_tag, out_params, mid_params, pool_reception, next_model):
+    out_channels, out_kernel, out_stride, out_groups = out_params
+    mid_channels, mid_kernel, mid_groups = mid_params
+    return \
+        get_decaying_block(
+            initial_skip_ratio, skip_tag, anti_tag, out_channels,
+            [
+                ('conv', (out_channels, mid_channels, out_kernel, out_stride, 1)),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(mid_channels, mid_kernel)),
+                ('lrelu', LRELU_SLOPE),
+                next_model,
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(mid_channels, mid_kernel)),
+                ('lrelu', LRELU_SLOPE),
+                ('trans', (mid_channels, out_channels, out_kernel, out_stride, 1)),
+                ('sub_res',
+                 ('poold', (pool_reception, 1, out_stride))
+                 ),
+            ]
+        )
+
+
+def get_level1_model(initial_skip_ratio, level2=None):
+    if level2 is None:
+        level2 = get_level2_model(initial_skip_ratio)
+    return \
+        get_decaying_block(
+            initial_skip_ratio, 'skip1', 'noise1', 1,
+            [
+                ('conv', (1, 16, 63, 1, 1)),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(16, 33)),
+                ('lrelu', LRELU_SLOPE),
+                level2,
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(16, 33)),
+                ('lrelu', LRELU_SLOPE),
+                ('conv', (16, 1, 63, 1, 1)),
+                ('tanh',)
+            ]
+        )
+
+
+def get_level2_model(initial_skip_ratio):
+    return \
+        get_decaying_block(
+            initial_skip_ratio, 'skip2', 'noise2', 16,
+            [
+                ('conv', (16, 48, 33, 3, 1)),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(48, 21)),
+                ('lrelu', LRELU_SLOPE),
+                get_level3_model(initial_skip_ratio),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(48, 21)),
+                ('lrelu', LRELU_SLOPE),
+                ('trans', (48, 16, 33, 3, 1)),
+                ('sub_res',
+                 ('poold', (31, 1, 3))
+                 ),
+            ]
+        )
+
+
+def get_level3_model(initial_skip_ratio):
+    return \
+        get_decaying_block(
+            initial_skip_ratio, 'skip3', 'noise3', 48,
+            [
+                ('conv', (48, 336, 21, 7, 1)),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(336, 13, 3)),
+                ('lrelu', LRELU_SLOPE),
+                get_level4_model(initial_skip_ratio),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(336, 13, 3)),
+                ('lrelu', LRELU_SLOPE),
+                ('trans', (336, 48, 21, 7, 1)),
+                ('sub_res',
+                 ('poold', (31, 1, 7))
+                 ),
+            ]
+        )
+
+
+def get_level4_model(initial_skip_ratio):
+    return \
+        get_decaying_block(
+            initial_skip_ratio, 'skip4', 'noise4', 336,
+            [
+                ('conv_shuffle', (336, 4368, 13, 13, 1, 16)),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(4368, 3, 56)),
+                ('lrelu', LRELU_SLOPE),
+                get_level5_model(initial_skip_ratio),
+                ('lrelu', LRELU_SLOPE),
+                ('fusion', get_res_block_config(4368, 3, 56)),
+                ('lrelu', LRELU_SLOPE),
+                ('trans_shuffle', (4368, 336, 13, 13, 1, 16)),
+                ('sub_res',
+                 ('poold', (31, 1, 13))
+                 ),
+            ]
+        )
+
+
+def get_level5_model(initial_skip_ratio):
+    return \
+        get_decaying_block(
+            initial_skip_ratio, 'skip5', 'noise5', 4368,
+            [
+                ('split', [
+                    ('conv_shuffle', (4368, 2184, 3, 1, 1, 21)),
+                    ('conv_shuffle', (4368, 2184, 3, 1, 1, 21))
+                ]),
+                ('merge', [
+                    ('conv_shuffle', (2184, 4368, 3, 1, 1, 21)),
+                    ('conv_shuffle', (2184, 4368, 3, 1, 1, 21))
+                ])
+            ]
+        )
+
+
+def get_decaying_block(initial_skip_ratio, skip_tag, anti_tag, noise_channels, inner_block):
+    return \
+        (
+            'sum',
+            [
+                [
+                    ('sum',
+                     ('valve', initial_skip_ratio, [skip_tag]),
+                     [
+                         ('noise', noise_channels),
+                         ('valve', initial_skip_ratio, [anti_tag]),
+                     ]),
+                    ('valve', initial_skip_ratio, [skip_tag])
+                ],
+                inner_block
+            ]
+        )
 
 
 def get_res_block_config(channel_size, kernel_size, groups=1):

@@ -111,3 +111,13 @@ class MelSpectrogram(nn.Module):
                                fmax=None
                                )
         return spec
+
+
+class Noise1d(nn.Module):
+    def __init__(self, channels):
+        self.channels = channels
+        super(Noise1d, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        batch_size, channels, length = input.size()
+        return torch.randn(batch_size, self.channels, length)

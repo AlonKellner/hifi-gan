@@ -6,3 +6,5 @@ tensorboard
 soundfile
 matplotlib
 numba
+tgt
+pandas
