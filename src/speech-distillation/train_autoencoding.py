@@ -193,7 +193,7 @@ def train(rank, a, h):
                     print(', '.join(message_lines))
 
                 # checkpointing
-                if steps % a.checkpoint_interval == 0 and steps != 0:
+                if steps % a.checkpoint_interval == 0:  # and steps != 0:
                     checkpoint_path = "{}/g_{:08d}".format(a.checkpoint_path, steps)
                     save_checkpoint(checkpoint_path,
                                     {'generator': (generator.module if h.num_gpus > 1 else generator).state_dict()})
@@ -278,13 +278,17 @@ def train(rank, a, h):
                     valve_limit = valve_config['limit']
                     if valve_limit < steps:
                         pow_decay = 0
+                        anti_pow_decay = 0
                     else:
                         valve_decay = valve_config['decay']
                         pow_decay = math.pow(valve_decay, h.valves_steps)
+
+                        anti_valve_decay = valve_config['anti_decay']
+                        anti_pow_decay = math.pow(anti_valve_decay, h.valves_steps)
                     for valve_module in valve_modules:
                         valve_module.ratio *= pow_decay
                     for anti_valve_module in anti_valves_modules:
-                        anti_valve_module.ratio = (1 - (1 - anti_valve_module.ratio) * pow_decay)
+                        anti_valve_module.ratio = (1 - (1 - anti_valve_module.ratio) * anti_pow_decay)
 
             steps += 1
 

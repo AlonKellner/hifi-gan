@@ -120,4 +120,4 @@ class Noise1d(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         batch_size, channels, length = input.size()
-        return torch.randn(batch_size, self.channels, length)
+        return torch.randn(batch_size, self.channels, length, device=input.device)

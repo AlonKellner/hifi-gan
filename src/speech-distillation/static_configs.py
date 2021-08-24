@@ -115,74 +115,6 @@ def get_all_in_one_block_config(pre_channels, kernel_size, dilation, pre_scale, 
             )
 
 
-def get_static_generator_config_old():
-    generator_config = [
-        ('encoder',
-         (
-             [
-                 ('conv', (1, 16, 63, 1, 1)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(16, 33)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('conv', (16, 48, 33, 3, 1)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(48, 21)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('conv', (48, 336, 21, 7, 1)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(336, 13, 3)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('conv_shuffle', (336, 4368, 13, 13, 1, 16)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(4368, 3, 56)),
-                 ('lrelu', LRELU_SLOPE),
-             ],
-             [
-                 ('conv_shuffle', (4368, 2184, 3, 1, 1, 21)),
-                 ('conv_shuffle', (4368, 2184, 3, 1, 1, 21))
-             ]
-         )
-         ),
-        ('decoder',
-         (
-             [
-                 ('conv_shuffle', (2184, 4368, 3, 1, 1, 21)),
-                 ('conv_shuffle', (2184, 4368, 3, 1, 1, 21))
-             ],
-             [
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(4368, 3, 56)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('trans_shuffle', (4368, 336, 13, 13, 1, 16)),
-                 ('sub_res',
-                  ('poold', (31, 1, 13))
-                  ),
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(336, 13, 3)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('trans', (336, 48, 21, 7, 1)),
-                 ('sub_res',
-                  ('poold', (31, 1, 7))
-                  ),
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(48, 21)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('trans', (48, 16, 33, 3, 1)),
-                 ('sub_res',
-                  ('poold', (31, 1, 3))
-                  ),
-                 ('lrelu', LRELU_SLOPE),
-                 ('fusion', get_res_block_config(16, 33)),
-                 ('lrelu', LRELU_SLOPE),
-                 ('conv', (16, 1, 63, 1, 1)),
-                 ('tanh',)
-             ]
-         )
-         )
-    ]
-    return generator_config
-
-
 def get_static_generator_config(initial_skip_ratio=1):
     level5 = get_level5_model(initial_skip_ratio)
     level4 = get_leveln_model(initial_skip_ratio, 'skip4', 'noise4', (336, 13, 13, 16), (4368, 3, 56), 31, level5)
@@ -199,15 +131,15 @@ def get_leveln_model(initial_skip_ratio, skip_tag, anti_tag, out_params, mid_par
         get_decaying_block(
             initial_skip_ratio, skip_tag, anti_tag, out_channels,
             [
-                ('conv', (out_channels, mid_channels, out_kernel, out_stride, 1)),
+                ('conv', (out_channels, mid_channels, out_kernel, out_stride, 1, out_groups)),
                 ('lrelu', LRELU_SLOPE),
-                ('fusion', get_res_block_config(mid_channels, mid_kernel)),
+                ('fusion', get_res_block_config(mid_channels, mid_kernel, mid_groups)),
                 ('lrelu', LRELU_SLOPE),
                 next_model,
                 ('lrelu', LRELU_SLOPE),
-                ('fusion', get_res_block_config(mid_channels, mid_kernel)),
+                ('fusion', get_res_block_config(mid_channels, mid_kernel, mid_groups)),
                 ('lrelu', LRELU_SLOPE),
-                ('trans', (mid_channels, out_channels, out_kernel, out_stride, 1)),
+                ('trans', (mid_channels, out_channels, out_kernel, out_stride, 1, out_groups)),
                 ('sub_res',
                  ('poold', (pool_reception, 1, out_stride))
                  ),
@@ -323,12 +255,14 @@ def get_decaying_block(initial_skip_ratio, skip_tag, anti_tag, noise_channels, i
             [
                 [
                     ('sum',
-                     ('valve', initial_skip_ratio, [skip_tag]),
                      [
-                         ('noise', noise_channels),
-                         ('valve', initial_skip_ratio, [anti_tag]),
+                         ('valve', initial_skip_ratio, [skip_tag]),
+                         [
+                             ('noise', noise_channels),
+                             ('valve', 0, [anti_tag]),
+                         ]
                      ]),
-                    ('valve', initial_skip_ratio, [skip_tag])
+                    ('valve', initial_skip_ratio, [skip_tag]),
                 ],
                 inner_block
             ]

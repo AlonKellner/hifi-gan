@@ -8,3 +8,4 @@ matplotlib
 numba
 tgt
 pandas
+pytorch-lightning

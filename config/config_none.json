@@ -35,27 +35,32 @@
     "valves": {
         "skip1": {
             "anti": "noise1",
-            "decay": 0.998,
+            "anti_decay": 0.9998,
+            "decay": 0.98,
             "limit": 5000
         },
         "skip2": {
             "anti": "noise2",
-            "decay": 0.999,
+            "anti_decay": 0.9999,
+            "decay": 0.99,
             "limit": 10000
         },
         "skip3": {
             "anti": "noise3",
-            "decay": 0.9995,
+            "anti_decay": 0.99995,
+            "decay": 0.995,
             "limit": 20000
         },
         "skip4": {
             "anti": "noise4",
-            "decay": 0.9998,
+            "anti_decay": 0.99998,
+            "decay": 0.998,
             "limit": 50000
         },
         "skip5": {
             "anti": "noise5",
-            "decay": 0.9999,
+            "anti_decay": 0.99999,
+            "decay": 0.999,
             "limit": 100000
         }
     }
