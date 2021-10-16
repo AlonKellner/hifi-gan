@@ -57,6 +57,7 @@ h = AttrDict(json_config)
 # print(result)
 
 train_dataset = MultilabelWaveDataset(
+    base_dir='/datasets',
     dir='/datasets/training_audio',
     name='train',
     config_path='**/train_data_config/*.json',
@@ -67,6 +68,7 @@ train_dataset = MultilabelWaveDataset(
 )
 
 test_dataset = MultilabelWaveDataset(
+    base_dir='/datasets',
     dir='/datasets/training_audio',
     name='test',
     config_path='**/test_data_config/*.json',

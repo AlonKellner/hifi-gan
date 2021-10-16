@@ -1,3 +1,5 @@
+import random
+
 import pandas as pd
 import re
 import json
@@ -170,6 +172,15 @@ def get_path_by_glob(subdir, glob_pattern):
     if len(files_list) == 0:
         raise Exception('Missing file [{}] in [{}]'.format(glob_pattern, str(subdir)))
     file_path = min(files_list, key=lambda x: len(str(x)))
+    return file_path
+
+
+def get_rand_by_glob(subdir, glob_pattern):
+    subdir = Path(subdir)
+    files_list = [path for path in subdir.glob(glob_pattern)]
+    if len(files_list) == 0:
+        raise Exception('Missing file [{}] in [{}]'.format(glob_pattern, str(subdir)))
+    file_path = random.choice(files_list)
     return file_path
 
 

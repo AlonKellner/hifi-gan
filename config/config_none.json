@@ -72,65 +72,58 @@
         "laugh"
       ],
       "rir": [
-        "small",
-        "medium",
-        "large"
+        "smallroom",
+        "mediumroom",
+        "largeroom"
       ],
-      "sox": {
-        "lowpass": [
-          "100",
-          "200",
-          "300",
-          "400"
-        ],
-        "highpass": [
-          "1000",
-          "2000",
-          "3000",
-          "4000"
-        ],
-        "reverb": [
-          "yes"
-        ],
-        "codec": [
-          "wav",
-          "gsm",
-          "mp3",
-          "vorbis"
-        ],
-        "hilbert": [
-          "yes"
-        ]
-      }
+      "reverb": [
+        "yes"
+      ],
+      "lowpass": [
+        "100",
+        "200",
+        "300",
+        "400"
+      ],
+      "highpass": [
+        "1000",
+        "2000",
+        "3000",
+        "4000"
+      ],
+      "codec": [
+        "wav",
+        "gsm",
+        "mp3",
+        "vorbis"
+      ],
+      "hilbert": [
+        "yes"
+      ]
     },
     "probs": {
       "prob": 0.5,
       "sub_probs": {
         "noise": {
-          "prob": 0.25
+          "prob": 0.16
         },
         "rir": {
-          "prob": 0.25
+          "prob": 0.16
         },
-        "sox": {
-          "prob": 0.25,
-          "sub_probs": {
-            "lowpass": {
-              "prob": 0.125
-            },
-            "highpass": {
-              "prob": 0.125
-            },
-            "reverb": {
-              "prob": 0.125
-            },
-            "codec": {
-              "prob": 0.125
-            },
-            "hilbert": {
-              "prob": 0.125
-            }
-          }
+        "lowpass": {
+          "prob": 0.16
+        },
+        "highpass": {
+          "prob": 0.16
+        },
+        "reverb": {
+          "prob": 0.16
+        },
+        "codec": {
+          "prob": 0.16
+        },
+        "hilbert": {
+          "prob": 0.16
         }
       }
     }

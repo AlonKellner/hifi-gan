@@ -17,7 +17,10 @@ from src.meldataset import load_wav
 from complex_data_parser import get_path_by_glob, parse_complex_data
 from textgrid_parsing import parse_textgrid
 
-from augmentation.augmentation_methods import noise_augmentation, rir_augmentation, sox_augmentation
+from augmentation.augmentation_methods import \
+    NoiseAugmentor, RirAugmentor, CodecAugmentor, \
+    LowpassAugmentor, HighpassAugmentor, ReverbAugmentor, \
+    HilbertAugmentor
 
 MAX_WAV_VALUE = 32768.0
 
@@ -36,7 +39,8 @@ augmentation_label_groups = {
 
 
 class MultilabelDataset(torch.utils.data.Dataset):
-    def __init__(self, dir, name, config_path, segment_size, sampling_rate, embedding_size, augmentation_config, split=True, n_cache_reuse=1,
+    def __init__(self, dir, name, config_path, segment_size, sampling_rate, embedding_size, augmentation_config,
+                 split=True, n_cache_reuse=1,
                  fine_tuning=False, deterministic=False):
         self.dir = dir
         self.name = name
@@ -227,12 +231,13 @@ class MultilabelDataset(torch.utils.data.Dataset):
                 if embedded_length >= embedded_segment_size:
                     cut_label_item = label_item[embedded_start:embedded_start + embedded_segment_size]
                 else:
-                    cut_label_item = torch.nn.functional.pad(label_item, (0, embedded_segment_size - embedded_length), 'constant')
+                    cut_label_item = torch.nn.functional.pad(label_item, (0, embedded_segment_size - embedded_length),
+                                                             'constant')
                 group[label] = cut_label_item
         return pickle_label_groups
 
     def augment_item(self, cut_item):
-        (length, ) = next(iter(next(iter(cut_item.values())).values())).size()
+        (length,) = next(iter(next(iter(cut_item.values())).values())).size()
         augmented_item = pd.DataFrame(['none'] * length, columns=['none'])
         should_augment = self.aug_probs['prob'] > random.random()
         augmented_item = self.augment_with(augmented_item, self.aug_probs, 'noise', should_augment)
@@ -266,8 +271,10 @@ class MultilabelDataset(torch.utils.data.Dataset):
 
 
 class MultilabelWaveDataset(torch.utils.data.Dataset):
-    def __init__(self, dir, name, config_path, segment_size, sampling_rate, embedding_size, augmentation_config, split=True, n_cache_reuse=1,
+    def __init__(self, base_dir, dir, name, config_path, segment_size, sampling_rate, embedding_size,
+                 augmentation_config, split=True, n_cache_reuse=1,
                  fine_tuning=False, deterministic=False):
+        self.base_dir = base_dir
         self.dir = dir
         self.name = name
         self.segment_size = segment_size
@@ -280,17 +287,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         self.deterministic = deterministic
         self.aug_options = augmentation_config['options']
         self.aug_probs = augmentation_config['probs']
-        self.aug_methods = {
-            'noise': noise_augmentation,
-            'rir': rir_augmentation,
-            'sox': {
-                'lowpass': sox_augmentation,
-                'highpass': sox_augmentation,
-                'reverb': sox_augmentation,
-                'codec': sox_augmentation,
-                'hilbert': sox_augmentation,
-            }
-        }
         print('Creating [{}] dataset:'.format(self.name))
         name_path = Path(os.path.join(dir, name))
         if not name_path.exists():
@@ -302,10 +298,23 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                                                            os.path.join(dir, name, 'files_with_labels.pickle'))
         self.label_options = self.do_with_pickle_cache(self.get_all_label_options,
                                                        os.path.join(dir, name, 'label_options.pickle'))
+        for augmentation, augmentation_labels in self.aug_options.items():
+            self.label_options[augmentation] = list({'none', *augmentation_labels})
+
         all_label_groups = {key: [*label_groups[key], *augmentation_label_groups[key]] for key in label_groups.keys()}
         self.label_option_groups = {
             key: {label: len(self.label_options[label]) for label in label_group}
             for key, label_group in all_label_groups.items()
+        }
+
+        self.aug_methods = {
+            'noise': NoiseAugmentor(self.base_dir, self.label_options).augment,
+            'rir': RirAugmentor(self.base_dir).augment,
+            'reverb': ReverbAugmentor(self.sampling_rate).augment,
+            'lowpass': LowpassAugmentor(self.sampling_rate).augment,
+            'highpass': HighpassAugmentor(self.sampling_rate).augment,
+            'codec': CodecAugmentor(self.sampling_rate).augment,
+            'hilbert': HilbertAugmentor(self.sampling_rate).augment
         }
         print('Dataset [{}] is ready!\n'.format(self.name))
 
@@ -325,9 +334,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         all_label_options = {}
         for col in labels_to_use:
             all_label_options[col] = set(self.files_with_labels[col].unique())
-
-        for augmentation, augmentation_labels in self.aug_options.items():
-            all_label_options[augmentation] = {'none', *augmentation_labels}
 
         with Pool(16) as pool:
             for label in timed_labels_to_use:
@@ -472,12 +478,13 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                 if embedded_length >= self.segment_size:
                     cut_label_item = label_item[embedded_start:embedded_start + embedded_segment_size]
                 else:
-                    cut_label_item = torch.nn.functional.pad(label_item, (0, embedded_segment_size - embedded_length), 'constant')
+                    cut_label_item = torch.nn.functional.pad(label_item, (0, embedded_segment_size - embedded_length),
+                                                             'constant')
                 group[label] = cut_label_item
         return pickle_label_groups
 
     def augment_label(self, cut_label):
-        (length, ) = next(iter(next(iter(cut_label.values())).values())).size()
+        (length,) = next(iter(next(iter(cut_label.values())).values())).size()
         augmented_label = pd.DataFrame(['none'] * length, columns=['none'])
         should_augment = self.aug_probs['prob'] > random.random()
         augmented_label = self.augment_label_with(augmented_label, self.aug_probs, 'noise', should_augment)
@@ -508,17 +515,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         augmented_label = self.augment_label_with(augmented_label, probs, 'codec', should_augment)
         augmented_label = self.augment_label_with(augmented_label, probs, 'hilbert', should_augment)
         return augmented_label
-
-    # def __init__(self, dir, config_path, segment_size, sampling_rate, split=True, n_cache_reuse=1,
-    #              fine_tuning=False, deterministic=False):
-    #     self.segment_size = segment_size
-    #     self.sampling_rate = sampling_rate
-    #     self.split = split
-    #     self.n_cache_reuse = n_cache_reuse
-    #     self.fine_tuning = fine_tuning
-    #     self._cache_ref_count = 0
-    #     self.deterministic = deterministic
-    #     self.files_with_labels = self.get_files_with_labels(dir, config_path)
 
     def get_cut_wav(self, index):
         wav = self.get_wav(index)
@@ -557,11 +553,12 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         pickle_label_groups = self.get_pickle_label(index)
         length = wav.size(0)
         embedded_segment_size = self.segment_size // self.embedding_size
-        embedded_length = min(length // self.embedding_size, next(iter(next(iter(pickle_label_groups.values())).values())).size(0))
+        embedded_length = min(length // self.embedding_size,
+                              next(iter(next(iter(pickle_label_groups.values())).values())).size(0))
         trimed_length = embedded_length * self.embedding_size
         trimed_start = 0
         if len(wav) > trimed_length:
-            wav = wav[trimed_start:trimed_start+trimed_length]
+            wav = wav[trimed_start:trimed_start + trimed_length]
         length = wav.size(0)
         # print(length, self.segment_size, embedded_length, embedded_segment_size)
 
@@ -585,7 +582,9 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                 if length >= self.segment_size:
                     cut_label_item = label_item[embedded_start:embedded_start + embedded_segment_size]
                 else:
-                    cut_label_item = torch.nn.functional.pad(label_item, (prefix_embedded_padding, postfix_embedded_padding), 'constant')
+                    cut_label_item = torch.nn.functional.pad(label_item,
+                                                             (prefix_embedded_padding, postfix_embedded_padding),
+                                                             'constant')
                     # print(label, label_item.size(), cut_label_item.size())
                 group[label] = cut_label_item
 
@@ -600,13 +599,13 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         options = self.aug_options
         probs = self.aug_probs
         methods = self.aug_methods
-        (length, ) = next(iter(next(iter(cut_label.values())).values())).size()
+        (length,) = next(iter(next(iter(cut_label.values())).values())).size()
         augmented_wav = cut_wav
         augmented_label = pd.DataFrame(['none'] * length, columns=['none'])
         should_augment = probs['prob'] > random.random()
-        augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, methods, options, probs, 'noise', should_augment)
-        augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, methods, options, probs, 'rir', should_augment)
-        augmented_wav, augmented_label = self.augment_item_with_sox(augmented_wav, augmented_label, methods, options, probs, should_augment)
+        for augmentation in options.keys():
+            augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, cut_label, methods, options,
+                                                                    probs, augmentation, should_augment)
         augmentation_tensors = self.convert_segmented_labels_to_tensor(augmented_label, augmentation_label_groups)
         for key in cut_label.keys():
             current_augmentation = augmentation_tensors[key]
@@ -614,25 +613,13 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                 cut_label[key][label] = value
         return augmented_wav, cut_label
 
-    def augment_item_with(self, augmented_wav, augmented_label, methods, options, probs, aug_type, should=True):
+    def augment_item_with(self, augmented_wav, augmented_label, cut_label, methods, options, probs, aug_type, should=True):
         value = 'none'
         probs = probs['sub_probs'][aug_type]
         values = options[aug_type]
         aug_method = methods[aug_type]
         if should and probs['prob'] > random.random():
-            value = values[random.randrange(0, len(values))]
-            augmented_wav = aug_method(augmented_wav)
+            value = random.choice(values)
+            augmented_label, augmented_wav, value = aug_method(augmented_label, cut_label, augmented_wav, value)
         augmented_label[aug_type] = value
-        return augmented_wav, augmented_label
-
-    def augment_item_with_sox(self, augmented_wav, augmented_label, methods, options, probs, should_augment):
-        probs = probs['sub_probs']['sox']
-        options = options['sox']
-        methods = methods['sox']
-        should_augment = should_augment and probs['prob'] > random.random()
-        augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, methods, options, probs, 'lowpass', should_augment)
-        augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, methods, options, probs, 'highpass', should_augment)
-        augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, methods, options, probs, 'reverb', should_augment)
-        augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, methods, options, probs, 'codec', should_augment)
-        augmented_wav, augmented_label = self.augment_item_with(augmented_wav, augmented_label, methods, options, probs, 'hilbert', should_augment)
         return augmented_wav, augmented_label
