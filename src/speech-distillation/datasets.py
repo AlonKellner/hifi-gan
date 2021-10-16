@@ -2,11 +2,8 @@ import random
 
 import torch
 import torch.utils.data
-from librosa.util import normalize
 
 from src.meldataset import load_wav
-
-MAX_WAV_VALUE = 32768.0
 
 
 class WaveDataset(torch.utils.data.Dataset):
@@ -25,9 +22,6 @@ class WaveDataset(torch.utils.data.Dataset):
         filename = self.audio_files[index]
         if self._cache_ref_count == 0:
             audio, sampling_rate = load_wav(filename)
-            audio = audio / MAX_WAV_VALUE
-            if not self.fine_tuning:
-                audio = normalize(audio) * 0.95
             self.cached_wav = audio
             if sampling_rate != self.sampling_rate:
                 raise ValueError("{} SR doesn't match target {} SR".format(
@@ -36,9 +30,6 @@ class WaveDataset(torch.utils.data.Dataset):
         else:
             audio = self.cached_wav
             self._cache_ref_count -= 1
-
-        audio = torch.FloatTensor(audio)
-        audio = audio.unsqueeze(0)
 
         if audio.size(1) >= self.segment_size:
             max_audio_start = audio.size(1) - self.segment_size

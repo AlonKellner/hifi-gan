@@ -1,3 +1,5 @@
+from random import randint
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
@@ -46,12 +48,25 @@ class GroupShuffle1d(nn.Module):
             .reshape(batch_size, channels, -1)
 
 
-class Period1d(nn.Module):
+class GroupUnshuffle1d(nn.Module):
+    def __init__(self, groups):
+        self.groups = groups
+        super(GroupUnshuffle1d, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        batch_size, channels, length = input.size()
+        return input\
+            .reshape(batch_size, channels//self.groups, self.groups, -1)\
+            .transpose(1, 2)\
+            .reshape(batch_size, channels, -1)
+
+
+class Roll1d(nn.Module):
     def __init__(self, period, padding_mode='constant', padding_value=0):
         self.period = period
         self.padding_mode = padding_mode
         self.padding_value = padding_value
-        super(Period1d, self).__init__()
+        super(Roll1d, self).__init__()
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         batch_size, channels, length = input.size()
@@ -60,6 +75,37 @@ class Period1d(nn.Module):
             .transpose(1, 2) \
             .reshape(batch_size, -1, channels * self.period) \
             .transpose(1, 2)
+
+
+class Unroll1d(nn.Module):
+    def __init__(self, period):
+        self.period = period
+        super(Unroll1d, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        batch_size, channels, length = input.size()
+        return input \
+            .transpose(1, 2) \
+            .reshape(batch_size, length * self.period, -1) \
+            .transpose(1, 2)
+
+
+class Replicate(nn.Module):
+    def __init__(self, replica_count):
+        self.replica_count = replica_count
+        super(Replicate, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        replicas = [input for i in range(self.replica_count)]
+        return torch.cat(replicas, dim=1)
+
+
+class AvgChannels(nn.Module):
+    def __init__(self):
+        super(AvgChannels, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return input.mean(dim=1)
 
 
 class AvgPool1dDilated(nn.Module):
@@ -121,3 +167,18 @@ class Noise1d(nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         batch_size, channels, length = input.size()
         return torch.randn(batch_size, self.channels, length, device=input.device)
+
+
+class OneHot(nn.Module):
+    def __init__(self, channels, dim=-1):
+        self.channels = channels
+        self.dim = dim
+        super(OneHot, self).__init__()
+
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        total_dims = len(input_tensor.size())
+        one_hot = f.one_hot(input_tensor, self.channels).type(torch.FloatTensor).to(input_tensor.device)
+        if self.dim != -1:
+            permutation = [i if i < self.dim else i-1 if i > self.dim else -1 for i in range(0, total_dims+1)]
+            one_hot = one_hot.permute(*permutation)
+        return one_hot

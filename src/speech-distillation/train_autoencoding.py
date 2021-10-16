@@ -79,11 +79,18 @@ def train(rank, a, h):
         generator = DistributedDataParallel(generator, device_ids=[rank]).to(device)
         discriminator = DistributedDataParallel(discriminator, device_ids=[rank]).to(device)
 
-    accumulation_steps = h.accumulated_batch_size / h.batch_size
+    accumulation_steps = h.accumulated_grad_batches
 
-    optim_g = torch.optim.AdamW(generator.parameters(), h.learning_rate, betas=(h.adam_b1, h.adam_b2))
-    optim_d = torch.optim.AdamW(discriminator.parameters(),
-                                h.learning_rate, betas=(h.adam_b1, h.adam_b2))
+    optim_g = torch.optim.AdamW(
+        generator.parameters(),
+        h.gen_learning_rate,
+        betas=(h.gen_adam_b1, h.gen_adam_b2)
+    )
+    optim_d = torch.optim.AdamW(
+        discriminator.parameters(),
+        h.disc_learning_rate,
+        betas=(h.disc_adam_b1, h.disc_adam_b2)
+    )
 
     if state_dict_do is not None:
         optim_g.load_state_dict(state_dict_do['optim_g'])

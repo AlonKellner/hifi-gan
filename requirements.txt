@@ -1,4 +1,7 @@
 torch
+torchaudio
+torchvision
+torchtext
 numpy
 librosa
 scipy

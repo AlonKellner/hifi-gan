@@ -6,9 +6,10 @@ from torch.nn.utils import weight_norm, spectral_norm
 from src.utils import init_weights
 
 from extra_utils import get_padding, get_padding_trans
-from custom_layers import Conv1dRechanneled, Period1d, MelSpectrogram, AvgPool1dDilated, GroupShuffle1d, Noise1d
+from custom_layers import Conv1dRechanneled, Roll1d, MelSpectrogram, AvgPool1dDilated, GroupShuffle1d, Noise1d, \
+    Unroll1d, GroupUnshuffle1d, Replicate, AvgChannels, OneHot
 from custom_blocks import ResBlock, FusionBlock, FeatureBlock, ProcessedFeatureBlock, SumBlock, SubResBlock, \
-    SplitterBlock, MergerBlock, ValveBlock
+    ChunkBlock, MergeBlock, ValveBlock, ListBlock, SplitBlock, SplitDictBlock, DictBlock, MergeDictBlock, RecursiveBlock
 from custom_discriminator import AllInOneBlock, AllInOneDiscriminator
 from ensemble import Ensemble
 from generator import Encoder, Decoder
@@ -40,7 +41,15 @@ def get_no_params_module_from_config(module_name):
     module = None
     if module_name == 'tanh':
         module = Tanh()
+    elif module_name == 'avg_ch':
+        module = AvgChannels()
+    elif module_name == 'merge':
+        module = MergeBlock()
+    elif module_name == 'merge_dict':
+        module = MergeDictBlock()
 
+    if module is None:
+        raise Exception('Unknown module type [{}]'.format(module_name))
     return module
 
 
@@ -69,7 +78,8 @@ def get_with_params_module_from_config(module_name, module_parameters):
                 [
                     ('conv', (chin, chout, kernel, stride, dilation, groups)),
                     ('shuffle', groups),
-                    ('conv', (chout, chout, 1, 1, 1, chout // groups))
+                    ('conv', (chout, chout, 1, 1, 1, chout // groups)),
+                    ('unshuffle', groups)
                 ]
             )
         module.apply(init_weights)
@@ -122,7 +132,8 @@ def get_with_params_module_from_config(module_name, module_parameters):
                 [
                     ('conv', (chin, chin, 1, 1, 1, chin // groups)),
                     ('shuffle', groups),
-                    ('trans', (chin, chout, kernel, stride, dilation, groups))
+                    ('trans', (chin, chout, kernel, stride, dilation, groups)),
+                    ('unshuffle', groups)
                 ]
             )
         module.apply(init_weights)
@@ -153,14 +164,23 @@ def get_with_params_module_from_config(module_name, module_parameters):
         kernel, stride, dilation = module_parameters
         module = AvgPool1dDilated(kernel_size=kernel, stride=stride, dilation=dilation,
                                   padding=get_padding(kernel, stride=stride, dilation=1))
-    elif module_name == 'period':
-        period, padding_mode, padding_value = process_period_params(*module_parameters)
-        module = Period1d(period=period,
-                          padding_mode=padding_mode,
-                          padding_value=padding_value)
+    elif module_name == 'roll':
+        period, padding_mode, padding_value = process_roll_params(*module_parameters)
+        module = Roll1d(period=period,
+                        padding_mode=padding_mode,
+                        padding_value=padding_value)
+    elif module_name == 'unroll':
+        period = module_parameters
+        module = Unroll1d(period=period)
+    elif module_name == 'repl':
+        replica_count = module_parameters
+        module = Replicate(replica_count=replica_count)
     elif module_name == 'shuffle':
         groups = module_parameters
         module = GroupShuffle1d(groups=groups)
+    elif module_name == 'unshuffle':
+        groups = module_parameters
+        module = GroupUnshuffle1d(groups=groups)
     elif module_name == 'mel':
         module = MelSpectrogram(*module_parameters)
     elif module_name == 'fusion':
@@ -175,18 +195,34 @@ def get_with_params_module_from_config(module_name, module_parameters):
             get_module_from_config(config) for config in modules_configs
         ])
         module = SumBlock(modules)
+    elif module_name == 'chunk':
+        split_count = module_parameters
+        module = ChunkBlock(split_count)
+    elif module_name == 'one_hot':
+        (channels, dim) = module_parameters
+        module = OneHot(channels, dim)
     elif module_name == 'split':
+        split_count = module_parameters
+        if isinstance(split_count, dict):
+            module = SplitDictBlock(split_count)
+        else:
+            module = SplitBlock(split_count)
+    elif module_name == 'list':
         modules_configs = module_parameters
         modules = nn.ModuleList([
             get_module_from_config(config) for config in modules_configs
         ])
-        module = SplitterBlock(modules)
-    elif module_name == 'merge':
+        module = ListBlock(modules)
+    elif module_name == 'dict':
         modules_configs = module_parameters
-        modules = nn.ModuleList([
-            get_module_from_config(config) for config in modules_configs
-        ])
-        module = MergerBlock(modules)
+        modules = nn.ModuleDict({
+            key: get_module_from_config(config) for key, config in modules_configs.items()
+        })
+        module = DictBlock(modules)
+    elif module_name == 'recursive':
+        modules_configs = module_parameters
+        modules = get_recursive_modules_from_configs(modules_configs)
+        module = RecursiveBlock(modules)
     elif module_name == 'res':
         module_config = module_parameters
         module = get_module_from_config(module_config)
@@ -253,6 +289,8 @@ def get_with_params_module_from_config(module_name, module_parameters):
         vo_decoder = get_module_from_config(vo_decoder_config)
         module = Decoder(mergers, vo_decoder)
 
+    if module is None:
+        raise Exception('Unknown module type [{}]'.format(module_name))
     return module
 
 
@@ -260,6 +298,9 @@ def process_conv_params(chin, chout, kernel, stride=1, dilation=1, groups=1, nor
     norm = weight_norm
     if norm_type == 'spectral':
         norm = spectral_norm
+    elif norm_type == 'none':
+        def norm(x):
+            return x
     return chin, chout, kernel, stride, dilation, groups, norm
 
 
@@ -267,8 +308,17 @@ def process_conv_shuffle_params(chin, chout, kernel, stride=1, dilation=1, group
     return chin, chout, kernel, stride, dilation, groups, norm_type
 
 
-def process_period_params(period, padding_mode='constant', padding_value=0):
+def process_roll_params(period, padding_mode='constant', padding_value=0):
     return period, padding_mode, padding_value
+
+
+def get_recursive_modules_from_configs(configs):
+    if isinstance(configs, dict):
+        return nn.ModuleDict({key: get_recursive_modules_from_configs(config) for key, config in configs.items()})
+    elif isinstance(configs, list):
+        return nn.ModuleList([get_recursive_modules_from_configs(config) for config in configs])
+    else:
+        return get_module_from_config(configs)
 
 
 class ConfigurableModule(torch.nn.Module):

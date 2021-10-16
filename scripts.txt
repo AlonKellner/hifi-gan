@@ -12,10 +12,18 @@ sudo nvidia-docker run \
 -v /home/alonkellner/projects/speech-distillation/models/mount:/mount \
 XXXXXXXXX
 
+--entrypoint= --rm -v /home/alonkellner/projects/speech-distillation/models/hifi-gan:/opt/project --gpus all --runtime=nvidia -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -e NVIDIA_VISIBLE_DEVICES=all -v /home/alonkellner/projects/speech-distillation/datasets/:/datasets -v /home/alonkellner/projects/speech-distillation/models/mount:/mount
+
 sudo docker run -d -p 6006:6006 \
 -v /home/alonkellner/projects/speech-distillation/models/mount/logs:/logs \
+volnet/tensorflow-tensorboard
+
+sudo docker run -d -p 6006:6006 \
+-v /home/alonkellner/projects/speech-distillation/models/mount/label_bias_sniffer/logs:/logs \
 volnet/tensorflow-tensorboard
 
 sudo docker build . --file inference_autoencoding.Dockerfile
 
 sudo docker build . --file test.Dockerfile
+
+--config config/config_none.json --input_wavs_dir /datasets/ljspeech/LJSpeech-1.1/wavs --input_training_file /datasets/ljspeech/LJSpeech-1.1/training.txt --input_validation_file /datasets/ljspeech/LJSpeech-1.1/validation.txt --checkpoint_path /mount

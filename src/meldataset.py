@@ -7,12 +7,13 @@ import numpy as np
 from librosa.util import normalize
 from scipy.io.wavfile import read
 from librosa.filters import mel as librosa_mel_fn
+import torchaudio
 
 MAX_WAV_VALUE = 32768.0
 
 
 def load_wav(full_path):
-    sampling_rate, data = read(full_path)
+    data, sampling_rate = torchaudio.load(full_path, normalize=True)
     return data, sampling_rate
 
 
