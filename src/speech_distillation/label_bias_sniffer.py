@@ -1,7 +1,3 @@
-import pytorch_lightning as pl
-from pytorch_lightning import loggers as pl_loggers
-
-import warnings
 import warnings
 
 import pytorch_lightning as pl
@@ -12,11 +8,10 @@ import json
 import torch
 from torch.utils.data import DistributedSampler, DataLoader
 from src.env import AttrDict
-from lightning.callbacks.continuous_checkpoint_callback import ContinuousCheckpointCallback
-from lightning.callbacks.history_checkpoint_callback import HistoryCheckpointCallback
-from lightning.callbacks.output_logging_callback import OutputLoggingCallback
-
-from torchsummary import summary, InputSize, RandInt
+from src.speech_distillation.continuous_checkpoint_callback import ContinuousCheckpointCallback
+from src.speech_distillation.history_checkpoint_callback import HistoryCheckpointCallback
+from src.speech_distillation.output_logging_callback import OutputLoggingCallback
+from src.speech_distillation.manual_optimization_callback import ManualOptimizationCallback
 
 from static_configs import generate_sniffers_configs_by_example
 from configurable_module import get_module_from_config
@@ -148,7 +143,10 @@ def main():
             HistoryCheckpointCallback('/mount/label_bias_sniffer/checkpoints/{}/{}/step'.format(key, experiment_name), 5000),
             OutputLoggingCallback({
                 'train': 100
-            })
+            }),
+            ManualOptimizationCallback(
+                accumulated_grad_batches=h.accumulated_grad_batches
+            )
         ]
     ) for key in models.keys()}
     for key, model in models.items():

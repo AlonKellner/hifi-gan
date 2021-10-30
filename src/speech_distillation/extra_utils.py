@@ -1,5 +1,7 @@
 import math
 
+import torch
+
 
 def get_padding(kernel, stride=(1, 1), dilation=(1, 1)):
     if isinstance(kernel, int):
@@ -29,6 +31,8 @@ def get_padding_period(length, period):
         return get_1d_padding_period(length, period)
     if isinstance(length, tuple):
         return tuple(get_1d_padding_period(*conv_params) for conv_params in zip(length, period))
+    if isinstance(length, torch.Tensor):
+        return get_padding_period(length.item(), period)
 
 
 def get_1d_padding_period(length, periods_count):

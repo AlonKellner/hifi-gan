@@ -1,13 +1,32 @@
 from pytorch_lightning.callbacks import Callback
 
-from .utils import save_trainer_checkpoint
-
 
 class OutputLoggingCallback(Callback):
     def __init__(self, logging_intervals):
         self.logging_intervals = logging_intervals
         self.loss_sums = {key: None for key in self.logging_intervals.keys()}
         self.loss_amounts = {key: 0 for key in self.logging_intervals.keys()}
+        self.last_log_steps = {key: -1 for key in self.logging_intervals.keys()}
+
+    def on_batch_start(self, trainer, pl_module) -> None:
+        last_global_step = pl_module.global_step - 1
+        for batch_type, logging_interval in self.logging_intervals.items():
+            last_log_step = self.last_log_steps[batch_type]
+            should_log = \
+                last_global_step % logging_interval == 0 and \
+                last_log_step != last_global_step and \
+                self.loss_sums[batch_type] is not None
+            if should_log:
+                sw = pl_module.logger.experiment
+                self._log_recursive(
+                    logger=sw,
+                    prefix='{}_losses'.format(batch_type),
+                    sums=self.loss_sums[batch_type],
+                    amounts=self.loss_amounts[batch_type],
+                    log_index=last_global_step)
+                self.last_log_steps[batch_type] = last_global_step
+                self.loss_sums[batch_type] = None
+                self.loss_amounts[batch_type] = 0
 
     def _on_batch_end(
             self,
@@ -26,11 +45,6 @@ class OutputLoggingCallback(Callback):
         else:
             loss_sum = self._recursively_add(loss_sum, outputs)
         loss_amount += 1
-
-        if loss_amount % self.logging_intervals[batch_type] == 0:
-            pl_module.log('{}_losses'.format(batch_type), outputs)
-            loss_sum = None
-            loss_amount = 0
 
         self.loss_sums[batch_type] = loss_sum
         self.loss_amounts[batch_type] = loss_amount
@@ -51,3 +65,11 @@ class OutputLoggingCallback(Callback):
 
     def on_test_batch_end(self, *params) -> None:
         self._on_batch_end('test', *params)
+
+    def _log_recursive(self, logger, prefix, sums, amounts, log_index):
+        if isinstance(sums, dict):
+            for key, sum in sums.items():
+                self._log_recursive(logger=logger, prefix=f'{prefix}/{key}', sums=sum, amounts=amounts,
+                                    log_index=log_index)
+        else:
+            logger.add_scalar(prefix, sums / amounts, log_index)

@@ -17,6 +17,10 @@ def load_wav(full_path):
     return data, sampling_rate
 
 
+def save_wav(full_path, data, sampling_rate):
+    torchaudio.save(full_path, data, sampling_rate)
+
+
 def dynamic_range_compression(x, C=1, clip_val=1e-5):
     return np.log(np.clip(x, a_min=clip_val, a_max=None) * C)
 
