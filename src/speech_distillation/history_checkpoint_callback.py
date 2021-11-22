@@ -6,7 +6,7 @@ from .lightning_callback_utils import save_trainer_checkpoint
 
 
 class HistoryCheckpointCallback(Callback):
-    def __init__(self, steps_interval):
+    def __init__(self, steps_interval=5000):
         self.steps_interval = steps_interval
 
     def on_batch_start(self, trainer, pl_module):

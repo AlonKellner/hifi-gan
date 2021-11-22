@@ -50,28 +50,36 @@ def spectral_de_normalize_torch(magnitudes):
 mel_basis = {}
 hann_window = {}
 
+torch_mels = {}
+
 
 def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
+    mel_key = f'{str(y.device)}_{n_fft}_{num_mels}_{sampling_rate}_{hop_size}_{win_size}_{fmin}_{fmax}_{center}'
+    if mel_key not in torch_mels:
+        torch_mel = torchaudio.transforms.MelSpectrogram(
+            n_fft=n_fft,
+            n_mels=num_mels,
+            sample_rate=sampling_rate,
+            hop_length=hop_size,
+            win_length=win_size,
+            f_min=fmin,
+            f_max=fmax,
+            center=center,
+            wkwargs={
+                'device': y.device
+            }
+        )
+        torch_mel.mel_scale.register_buffer('fb', torch_mel.mel_scale.fb.to(y.device))
+        torch_mels[mel_key] = torch_mel
     if torch.min(y) < -1.:
         print('min value is ', torch.min(y))
     if torch.max(y) > 1.:
         print('max value is ', torch.max(y))
-
-    global mel_basis, hann_window
-    if fmax not in mel_basis:
-        mel = librosa_mel_fn(sampling_rate, n_fft, num_mels, fmin, fmax)
-        mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)
-        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
-
     y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
     y = y.squeeze(1)
 
-    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True)
+    spec = torch_mels[mel_key](y)
 
-    spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
-
-    spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y.device)], spec)
     spec = spectral_normalize_torch(spec)
 
     return spec

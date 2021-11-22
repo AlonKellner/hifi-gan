@@ -18,12 +18,3 @@ class GanModelsGraphVisualizationCallback(Callback):
 
             sw = pl_module.logger.experiment
             sw.add_graph(pl_module.generator, wav)
-            # sw.add_graph(pl_module.discriminator, wav)
-            # h = pl_module.config
-            # embedding = torch.zeros((h.embedding_size, h.segment_size // h.embedding_size))
-            # embedding = embedding.cuda().unsqueeze(0)
-
-            # for keeper in pl_module.keepers.values():
-            #     sw.add_graph(keeper, embedding, use_strict_trace=False)
-            # for hunter in pl_module.hunters.values():
-            #     sw.add_graph(hunter, embedding, use_strict_trace=False)

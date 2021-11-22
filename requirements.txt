@@ -11,4 +11,5 @@ matplotlib
 numba
 tgt
 pandas
-pytorch-lightning
+pytorch-lightning==1.4.9
+pyyaml

@@ -23,7 +23,7 @@ from static_configs import get_static_generator_config, \
     get_static_all_in_one_discriminator
 from datasets import WaveDataset
 from configurable_module import get_module_from_config
-from custom_losses import feature_loss, one_loss, zero_loss
+from custom_losses import recursive_loss, plus_mean_loss, minus_mean_loss
 from custom_blocks import get_modules, ValveBlock
 
 torch.backends.cudnn.benchmark = True
@@ -327,12 +327,12 @@ def get_discrimination_loss(y, y_generated, discriminator):
     y_all_g_detach, y_all_var_g_detach = y_mom_g_detach
     y_d_g_detach, y_sub_d_g_detach = y_all_g_detach
 
-    loss_disc_r = one_loss(y_d_r)
-    loss_sub_disc_r = sum(one_loss(sub_d) for sub_d in y_sub_d_r)
+    loss_disc_r = plus_mean_loss(y_d_r)
+    loss_sub_disc_r = sum(plus_mean_loss(sub_d) for sub_d in y_sub_d_r)
     loss_all_disc_r = loss_disc_r + loss_sub_disc_r
 
-    loss_disc_g = zero_loss(y_d_g_detach)
-    loss_sub_disc_g = sum(zero_loss(sub_d) for sub_d in y_sub_d_g_detach)
+    loss_disc_g = minus_mean_loss(y_d_g_detach)
+    loss_sub_disc_g = sum(minus_mean_loss(sub_d) for sub_d in y_sub_d_g_detach)
     loss_all_disc_g = loss_disc_g + loss_sub_disc_g
 
     loss_all_disc = loss_all_disc_r + loss_all_disc_g
@@ -345,11 +345,11 @@ def get_adversarial_loss(y, y_generated, discriminator):
     y_all_g, y_all_var_g = y_mom_g
     y_d_g, y_sub_d_g = y_all_g
 
-    loss_disc = one_loss(y_d_g)
-    loss_sub_disc = sum(one_loss(sub_d) for sub_d in y_sub_d_g)
+    loss_disc = plus_mean_loss(y_d_g)
+    loss_sub_disc = sum(plus_mean_loss(sub_d) for sub_d in y_sub_d_g)
     loss_all_disc = (loss_disc + loss_sub_disc) * 0.003
 
-    loss_fm = feature_loss(y_fmap_r, y_fmap_g) * 0.003
+    loss_fm = recursive_loss(y_fmap_r, y_fmap_g) * 0.003
 
     loss_adv = (loss_all_disc + loss_fm)
     return loss_adv, loss_all_disc, loss_fm

@@ -8,11 +8,11 @@ from .lightning_callback_utils import load_trainer_checkpoint, save_trainer_chec
 
 
 class ContinuousCheckpointCallback(Callback):
-    def __init__(self, steps_interval):
+    def __init__(self, steps_interval=100):
         self.steps_interval = steps_interval
         self.latest_path = None
 
-    def on_init_end(self, trainer):
+    def on_init_end(self, trainer) -> None:
         checkpoint_dir = os.path.join(trainer.log_dir, 'checkpoints')
         self.latest_path = os.path.join(checkpoint_dir, f'latest')
         if Path(self.latest_path).exists():

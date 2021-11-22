@@ -1,0 +1,197 @@
+{
+  "experiment_name": "libriadapt/baseline",
+  "version": 0,
+  "batch_size": 8,
+  "segment_size": 43680,
+  "accumulated_grad_batches": 25,
+  "gen_expansion": 8,
+  "disc_expansion": 1,
+  "lr_decay": 0.99999,
+  "learning_rates": {
+    "generator": 0.001,
+    "discriminator": 0.001,
+    "keepers": {
+      "style": 0.001,
+      "content": 0.001
+    },
+    "hunters": {
+      "style": 0.001,
+      "content": 0.001
+    }
+  },
+  "adam_b1": 0.8,
+  "adam_b2": 0.99,
+  "gradient_clip": 1000.0,
+  "loss_funcs": {
+    "generator": {
+      "reconstruction": {
+        "wave": "mse",
+        "mel": "mse"
+      },
+      "adversarial": {
+        "discriminator": {
+          "disc": "-",
+          "fmap": "mse"
+        },
+        "hunters": {
+          "style": "bias_ce",
+          "content": "bias_ce"
+        }
+      },
+      "keepers": {
+        "style": "ce",
+        "content": "ce"
+      }
+    },
+    "discriminator": "+",
+    "hunters": {
+      "style": "ce",
+      "content": "ce"
+    }
+  },
+  "loss_factors": {
+    "generator": {
+      "reconstruction": {
+        "wave": 350,
+        "mel": 10
+      },
+      "adversarial": {
+        "discriminator": {
+          "disc": 30,
+          "fmap": 0.01
+        },
+        "hunters": {
+          "style": 1,
+          "content": 1
+        }
+      },
+      "keepers": {
+        "style": 1,
+        "content": 1
+      }
+    },
+    "discriminator": 1,
+    "hunters": {
+      "style": 1,
+      "content": 1
+    }
+  },
+  "validation_segment_size": 109200,
+  "validation_amount": 100,
+  "sampling_rate": 16000,
+  "embedding_size": 273,
+  "num_workers": 16,
+  "visualizations_amount": 5,
+  "initial_skip_ratio": 0.0,
+  "valves": {
+    "skip1": {
+      "anti": "noise1",
+      "anti_decay": 0.9998,
+      "decay": 0.98,
+      "start": 0,
+      "limit": 500
+    },
+    "skip2": {
+      "anti": "noise2",
+      "anti_decay": 0.9999,
+      "decay": 0.99,
+      "start": 400,
+      "limit": 1400
+    },
+    "skip3": {
+      "anti": "noise3",
+      "anti_decay": 0.99995,
+      "decay": 0.995,
+      "start": 1100,
+      "limit": 3100
+    },
+    "skip4": {
+      "anti": "noise4",
+      "anti_decay": 0.99998,
+      "decay": 0.998,
+      "start": 2500,
+      "limit": 7500
+    },
+    "skip5": {
+      "anti": "noise5",
+      "anti_decay": 0.99999,
+      "decay": 0.999,
+      "start": 6000,
+      "limit": 16000
+    }
+  },
+  "augmentation": {
+    "options": {
+      "noise": [
+        "rain",
+        "wind",
+        "laugh"
+      ],
+      "rir": [
+        "smallroom",
+        "mediumroom",
+        "largeroom"
+      ],
+      "reverb": [
+        "yes"
+      ],
+      "lowpass": [
+        "100",
+        "200",
+        "300",
+        "400"
+      ],
+      "highpass": [
+        "1000",
+        "2000",
+        "3000",
+        "4000"
+      ],
+      "codec": [
+        "wav",
+        "gsm",
+        "mp3",
+        "vorbis"
+      ],
+      "hilbert": [
+        "yes"
+      ]
+    },
+    "probs": {
+      "prob": 0.8,
+      "sub_probs": {
+        "noise": {
+          "prob": 0.16
+        },
+        "rir": {
+          "prob": 0.16
+        },
+        "lowpass": {
+          "prob": 0.16
+        },
+        "highpass": {
+          "prob": 0.16
+        },
+        "reverb": {
+          "prob": 0.16
+        },
+        "codec": {
+          "prob": 0.16
+        },
+        "hilbert": {
+          "prob": 0.16
+        }
+      }
+    }
+  },
+  "num_gpus": 0,
+  "seed": 1234,
+  "num_mels": 80,
+  "num_freq": 1025,
+  "n_fft": 1024,
+  "hop_size": 256,
+  "win_size": 1024,
+  "fmin": 0,
+  "fmax": 8000,
+  "fmax_for_loss": null
+}

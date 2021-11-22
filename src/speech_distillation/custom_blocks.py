@@ -27,7 +27,6 @@ class SumBlock(torch.nn.Module):
         xsum = None
         for sub_block in self.sub_blocks:
             value = sub_block(x)
-            # if any(list(value.isnan().flatten())):
             if xsum is None:
                 xsum = value
             else:
@@ -185,12 +184,12 @@ class ProcessedFeatureBlock(FeatureBlock):
         super(ProcessedFeatureBlock, self).__init__(model, tags_to_find)
         self.feature_models = feature_models
 
-    def forward(self, *x):
-        x = self.model(*x)
+    def forward(self, *params):
+        x = self.model(*params)
         features = self.features
         self.features = []
         processed_features = [
-            feature_model(feature) for feature_model, feature in zip(self.feature_models, features)
+            self.feature_models[index % len(self.feature_models)](feature) for index, feature in enumerate(features)
         ]
         return x, processed_features
 

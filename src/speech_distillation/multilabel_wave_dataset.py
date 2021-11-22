@@ -39,7 +39,7 @@ augmentation_label_groups = {
 
 class MultilabelWaveDataset(torch.utils.data.Dataset):
     def __init__(self, base_dir, dir, name, config_path, segment_size, sampling_rate, embedding_size,
-                 augmentation_config=None, split=True, size=None,
+                 augmentation_config=None, disable_wavs=False, split=True, size=None,
                  fine_tuning=False, deterministic=False):
         self.base_dir = base_dir
         self.dir = dir
@@ -52,6 +52,7 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         self.size = size
         self.deterministic = deterministic
         self.random = random.Random()
+        self.disable_wavs = disable_wavs
         self.should_augment = augmentation_config is not None
         if self.should_augment:
             self.aug_options = augmentation_config['options']
@@ -268,6 +269,8 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
 
     def get_wav(self, index):
         wav_path = get_path_by_glob(self.dir, self.files_with_labels.iloc[[index]].squeeze()['wav'])
+        if self.disable_wavs:
+            return torch.zeros((self.segment_size,)), str(wav_path)
         audio, sampling_rate = load_wav(wav_path)
 
         if sampling_rate != self.sampling_rate:
@@ -355,6 +358,13 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         aug_method = methods[aug_type]
         if should and probs['prob'] > self.random.random():
             value = self.random.choice(values)
-            augmented_label, augmented_wav, value = aug_method(augmented_label, cut_label, augmented_wav, value)
+            augmented_label, augmented_wav, value = aug_method(
+                self.random,
+                augmented_label,
+                cut_label,
+                augmented_wav,
+                value,
+                self.disable_wavs
+            )
         augmented_label[aug_type] = value
         return augmented_wav, augmented_label, value

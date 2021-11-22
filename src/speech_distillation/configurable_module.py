@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from torch.nn import Conv1d, ConvTranspose1d, LeakyReLU, Tanh, Conv2d, ConvTranspose2d, AvgPool1d, Upsample
+from torch.nn import Conv1d, ConvTranspose1d, LeakyReLU, Tanh, Conv2d, ConvTranspose2d, AvgPool1d, Upsample, Softmax, \
+    Sigmoid
 from torch.nn.utils import weight_norm, spectral_norm
 
 from src.utils import init_weights
@@ -41,12 +42,16 @@ def get_no_params_module_from_config(module_name):
     module = None
     if module_name == 'tanh':
         module = Tanh()
+    elif module_name == 'sigmoid':
+        module = Sigmoid()
     elif module_name == 'avg_ch':
         module = AvgChannels()
     elif module_name == 'merge':
         module = MergeBlock()
     elif module_name == 'merge_dict':
         module = MergeDictBlock()
+    elif module_name == 'softmax':
+        module = Softmax(dim=1)
 
     if module is None:
         raise Exception('Unknown module type [{}]'.format(module_name))

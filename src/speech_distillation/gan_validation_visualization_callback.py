@@ -13,16 +13,15 @@ class GanValidationVisualizationCallback(Callback):
         self, trainer, pl_module, batch, batch_idx, dataloader_idx
     ) -> None:
         wav, wav_path, time_labels, labels = batch
-        wav_generated = pl_module.generator(wav.unsqueeze(1))
+        wav_generated, embeddings = pl_module.generator(wav.unsqueeze(1))
         wav_diff = wav - wav_generated
-        reconstruction_loss, mel_loss, wave_loss, wav_mel, wav_generated_mel = \
-            pl_module.get_reconstruction_loss(wav, wav_generated)
-        wav_diff_mel = pl_module.get_mel_spectrogram(wav_diff)
+        wav_generated_mel, wav_mel, wav_diff_mel = pl_module.get_mel_spectrograms(wav_generated, wav, wav_diff)
 
         wav_mel_diff_inverse = wav_mel - wav_generated_mel
         
         sw = pl_module.logger.experiment
-        if batch_idx in self.ground_truth_to_log:
+        if pl_module.global_step <= self.amount_to_log and \
+                batch_idx in self.ground_truth_to_log:
             self.ground_truth_to_log.remove(batch_idx)
 
             sw.add_audio('ground_truth/wav_{}'.format(batch_idx), wav[0], pl_module.global_step, pl_module.config.sampling_rate)

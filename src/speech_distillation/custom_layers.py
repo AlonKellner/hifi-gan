@@ -105,7 +105,7 @@ class AvgChannels(nn.Module):
         super(AvgChannels, self).__init__()
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return input.mean(dim=1)
+        return input.mean(dim=1).unsqueeze(1)
 
 
 class AvgPool1dDilated(nn.Module):

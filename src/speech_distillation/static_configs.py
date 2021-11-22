@@ -2,14 +2,15 @@ LRELU_SLOPE = 0.1
 
 
 def get_static_all_in_one_discriminator(expansion_size=1, ensemble_size=3):
-    return ('fmap',
+    return ('pfmap',
             (
                 ('ensemble',
                  [
                      get_static_single_all_in_one_discriminator_fmap(expansion_size) for i in range(ensemble_size)
                  ]
                  ),
-                ['all_in_one']
+                ['all_in_one'],
+                [('tanh',)]
             )
             )
 
@@ -20,15 +21,17 @@ def get_static_single_all_in_one_discriminator_fmap(extra_channels=1):
                 get_static_single_all_in_one_discriminator(extra_channels=extra_channels),
                 ['all_in_one'],
                 [
-                    ('conv', (extra_channels, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 2, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 3, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 5, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 8, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 13, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 21, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 33, 1, 3, 1, 2)),
-                    ('conv', (extra_channels * 54, 1, 3, 1, 2)),
+                    [('conv', (extra_channels, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 2, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 3, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 5, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 8, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 13, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 21, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 33, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 54, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 90, 1, 3, 1, 2)), ('tanh',)],
+                    [('conv', (extra_channels * 144, 1, 3, 1, 2)), ('tanh',)],
                 ]
             )
             )
@@ -83,9 +86,7 @@ def get_static_single_all_in_one_discriminator(extra_channels=1):
                     get_all_in_one_block_config(extra_channels * 90, 1, 5, 90, 144, extra_channels,
                                                 raw_blocks=[get_roll_raw_block(144)], tags=['all_in_one']),
                 ],
-                [
-                    ('conv', (extra_channels * 144, 1, 33, 1, 1)),
-                ],
+                [('conv', (extra_channels * 144, 1, 33, 1, 1)), ('tanh',)],
             )
             )
 
@@ -109,22 +110,24 @@ def get_all_in_one_block_config(pre_channels, kernel_size, dilation, pre_scale, 
                     ('lrelu', LRELU_SLOPE),
                     ('res',
                      ('conv_shuffle', (post_channels, post_channels, kernel_size, 1, dilation, groups)),
-                     ),
-                    ('lrelu', LRELU_SLOPE, tags),
+                     tags),
+                    ('lrelu', LRELU_SLOPE),
                 ]
             )
             )
 
 
 def get_static_generator_config(initial_skip_ratio=1, expansion_size=16):
-    level5 = get_level5_model(initial_skip_ratio, 273 * expansion_size)
+    embedding_tags = ['embeddings']
+    level5 = get_level5_model(initial_skip_ratio, 273 * expansion_size, embedding_tags=embedding_tags)
     level4 = get_leveln_model(initial_skip_ratio, 'skip4', 'noise4', (21 * expansion_size, 13, 13, expansion_size),
-                              (273 * expansion_size, 3, 56), 31, level5)
+                              (273 * expansion_size, 3, 39), 31, level5)
     level3 = get_leveln_model(initial_skip_ratio, 'skip3', 'noise3', (3 * expansion_size, 21, 7, 1),
                               (21 * expansion_size, 13, 3), 31, level4)
     level2 = get_leveln_model(initial_skip_ratio, 'skip2', 'noise2', (expansion_size, 33, 3, 1),
                               (3 * expansion_size, 21, 1), 31, level3)
     generator_config = get_level1_model(initial_skip_ratio, level2, expansion_size)
+    generator_config = ('fmap', (generator_config, embedding_tags))
     return generator_config
 
 
@@ -160,7 +163,7 @@ def get_level1_model(initial_skip_ratio, level2, expansion_size=16):
                 ('repl', expansion_size)
             ]),
             get_decaying_block(
-                initial_skip_ratio, 'skip1', 'noise1', 1,
+                initial_skip_ratio, 'skip1', 'noise1', expansion_size,
                 [
                     ('lrelu', LRELU_SLOPE),
                     get_res_block_config(expansion_size, 33),
@@ -179,18 +182,20 @@ def get_level1_model(initial_skip_ratio, level2, expansion_size=16):
         ]
 
 
-def get_level5_model(initial_skip_ratio, channels):
+def get_level5_model(initial_skip_ratio, channels, embedding_tags=[]):
     return \
         get_decaying_block(
             initial_skip_ratio, 'skip5', 'noise5', channels,
             [
-                ('split', {'content': channels // 2, 'style': channels // 2}),
+                ('split', {'content': channels // 2, 'style': channels // 2}, embedding_tags),
                 ('merge_dict',)
             ]
         )
 
 
 def get_decaying_block(initial_skip_ratio, skip_tag, anti_tag, noise_channels, inner_block):
+    if initial_skip_ratio <= 0:
+        return inner_block
     return \
         (
             'sum',
@@ -281,15 +286,12 @@ def get_fusion_res_block_config(channel_size, kernel_size, groups=1):
     return 'fusion', common_res_blocks
 
 
-def get_classifier_backbone(input_channels, output_channels, hiddens):
-    return [
-        ('conv', (input_channels, hiddens[0], 3)),
-        *[('conv', (hiddens[i], hiddens[i + 1], 3)) for i in range(len(hiddens) - 1)],
-        ('conv', (hiddens[-1], output_channels, 3)),
-    ]
+def get_classifier_backbone(input_channels, output_channels, hiddens, groups=[1]):
+    layers = [input_channels, *hiddens, output_channels]
+    return [('conv', (layers[i], layers[i + 1], 3, 1, 1, groups[i % len(groups)])) for i in range(len(layers) - 1)]
 
 
-def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[1092, 546, 364]):
+def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[1092, 546, 364], one_hot=False):
     input_channels = sum(value for value in label_group.values())
     other_label_groups = {ex_key: value for ex_key, value in example_item.items() if ex_key != key}
     other_groups_channels = {
@@ -297,18 +299,25 @@ def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[
         for ex_key, other_label_group in other_label_groups.items()
     }
     output_channels = sum(other_groups_channels.values())
-    return [
-        ('recursive', {label: ('one_hot', (value, 1)) for label, value in label_group.items()}),
+    layers = [
         ('merge_dict',),
         get_classifier_backbone(input_channels, output_channels, hiddens),
         ('split', other_groups_channels),
-        ('recursive', {group: ('split', sizes) for group, sizes in other_label_groups.items()})
+        ('recursive', {group: ('split', sizes) for group, sizes in other_label_groups.items()}),
+        ('recursive', {group: {key: ('softmax',) for key in sizes} for group, sizes in other_label_groups.items()}),
     ]
+    if one_hot:
+        one_hot_layer = ('recursive', {label: ('one_hot', (value, 1)) for label, value in label_group.items()})
+        layers = [one_hot_layer, *layers]
+    return layers
 
 
-def generate_sniffers_configs_by_example(example_item):
+def generate_sniffers_configs_by_example(example_item, hiddens=[1092, 546, 364], ensemble_size=3, one_hot=False):
     sniffers = {
-        key: generate_sniffer_config_by_example(key, label_group, example_item)
+        key: ('ensemble', [
+            generate_sniffer_config_by_example(key, label_group, example_item, hiddens=hiddens, one_hot=one_hot)
+            for i in range(ensemble_size)
+        ])
         for key, label_group in example_item.items()
     }
     return sniffers
