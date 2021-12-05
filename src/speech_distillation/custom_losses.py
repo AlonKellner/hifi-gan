@@ -1,29 +1,33 @@
-import math
-
 import torch
 from torch.nn import functional as F
+
+EPSILON = 1e-08
+cross_entropies = {}
+weight_tensors = {}
 
 
 def recursive_loss(loss_func, x, *args):
     if isinstance(x, dict):
-        return sum(recursive_loss(loss_func, x[key], *[arg[key] for arg in args]) for key in x.keys()) / len(x)
+        return sum(recursive_loss(loss_func, x[key], *[arg[key] for arg in args]) for key in x.keys())
     elif isinstance(x, (list, tuple)):
-        return sum(recursive_loss(loss_func, x[index], *[arg[index] for arg in args]) for index in range(len(x))) / len(
-            x)
+        return sum(recursive_loss(loss_func, x[index], *[arg[index] for arg in args]) for index in range(len(x)))
     else:
         return loss_func(x, *args)
 
 
-def minus_mean_loss(x):
-    return torch.mean(x)
+def minus_mean_loss(*x):
+    return +sum(torch.mean(_x) for _x in x)
 
 
-def plus_mean_loss(x):
-    return -torch.mean(x)
+def plus_mean_loss(*x):
+    return -sum(torch.mean(_x) for _x in x)
 
 
-def cross_entropy_loss_func():
-    return torch.nn.CrossEntropyLoss()
+def cross_entropy_loss(x, target, weights: (float,)):
+    weights_hash = hash(weights)
+    if weights_hash not in cross_entropies:
+        cross_entropies[weights_hash] = torch.nn.CrossEntropyLoss(weight=(torch.Tensor(weights)**(-1)).cuda())
+    return cross_entropies[weights_hash](x, target)
 
 
 def binary_cross_entropy_loss(x, y):
@@ -31,24 +35,28 @@ def binary_cross_entropy_loss(x, y):
 
 
 def binary_entropy(x, y, sign):
-    return (y * 0.5 * sign + 0.5) * torch.log(x * 0.5 * sign + 0.5 + 1e-08)
+    return (y * 0.5 * sign + 0.5) * torch.log(x * 0.5 * sign + 0.5 + EPSILON)
 
 
-def bias_corrected_cross_entropy_loss(x, target, ground_truth, dim=1):
-    flat = bias_corrected_cross_entropy(x, target, ground_truth, dim=dim)
+def bias_corrected_cross_entropy_loss(x, target, ground_truth, weights, dim=1):
+    weights_hash = hash((weights, tuple(x.size())))
+    if weights_hash not in weight_tensors:
+        weight_tensors[weights_hash] = (torch.Tensor(weights)**(-1)).unsqueeze(0).unsqueeze(2).broadcast_to(x.size()).cuda()
+    weights_tensor = weight_tensors[weights_hash]
+    flat = bias_corrected_cross_entropy(x, target, ground_truth, weights_tensor, dim=dim)
     loss = flat.mean()
     return loss
 
 
-def bias_corrected_cross_entropy(x, target, ground_truth, dim=1):
+def bias_corrected_cross_entropy(x, target, ground_truth, weights, dim=1):
     one_hot = F.one_hot(ground_truth, x.size(dim)).transpose(-1, dim)
     high = torch.max(one_hot, target)
     low = torch.min(one_hot, target)
-    scale = high - low
+    scale = high - low + EPSILON
     normalized = (x - low) / scale
     sign = (-one_hot * 2 + 1)
     transformed = sign * (normalized - 0.5) + 0.5
-    raw = -torch.log(transformed + 1e-08)
+    raw = -torch.log(transformed + EPSILON)*weights
     flat = torch.max(raw, torch.zeros_like(raw))
     flat_scaled = flat * scale * scale
     return flat_scaled
@@ -59,8 +67,8 @@ loss_types = {
     'minus': lambda: minus_mean_loss,
     '+': lambda: plus_mean_loss,
     'plus': lambda: plus_mean_loss,
-    'ce': torch.nn.CrossEntropyLoss,
-    'cross_entropy': torch.nn.CrossEntropyLoss,
+    'ce': lambda: cross_entropy_loss,
+    'cross_entropy': lambda: cross_entropy_loss,
     'bce': lambda: binary_cross_entropy_loss,
     'binary_cross_entropy': lambda: binary_cross_entropy_loss,
     'mse': torch.nn.MSELoss,

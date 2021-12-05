@@ -42,8 +42,9 @@ class GroupShuffle1d(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         batch_size, channels, length = input.size()
+        mid_channels = torch.div(channels, self.groups, rounding_mode='floor')
         return input\
-            .reshape(batch_size, self.groups, channels//self.groups, -1)\
+            .reshape(batch_size, self.groups, mid_channels, -1)\
             .transpose(1, 2)\
             .reshape(batch_size, channels, -1)
 
@@ -55,8 +56,9 @@ class GroupUnshuffle1d(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         batch_size, channels, length = input.size()
+        mid_channels = torch.div(channels, self.groups, rounding_mode='floor')
         return input\
-            .reshape(batch_size, channels//self.groups, self.groups, -1)\
+            .reshape(batch_size, mid_channels, self.groups, -1)\
             .transpose(1, 2)\
             .reshape(batch_size, channels, -1)
 

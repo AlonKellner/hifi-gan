@@ -20,7 +20,7 @@ class ManualOptimizationCallback(Callback):
             if self.clip_value > 0:
                 for key, learning_model in learning_models.items():
                     norm = clip_grad_norm_(learning_model.parameters(), self.clip_value)
-                    sw.add_scalar(f'params/grad_clip/norm/{key}', norm, pl_module.global_step)
+                    sw.add_scalar(f'gradients/{key}', norm, pl_module.global_step)
             optimizers = pl_module.optimizers()
             optimizers = optimizers if isinstance(optimizers, list) else [optimizers]
             for optimizer in optimizers:

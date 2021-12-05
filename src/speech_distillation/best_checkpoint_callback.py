@@ -41,5 +41,7 @@ class BestCheckpointCallback(OutputSumResetCallback, Callback):
     def _avg_total_recursive(self, sums, amounts):
         if isinstance(sums, dict):
             return sum(self._avg_total_recursive(sums=sub_sum, amounts=amounts) for key, sub_sum in sums.items())
+        elif isinstance(sums, (list, tuple)):
+            return sum(self._avg_total_recursive(sums=sub_sum, amounts=amounts) for sub_sum in sums)
         else:
             return sums / amounts

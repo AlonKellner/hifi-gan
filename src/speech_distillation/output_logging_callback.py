@@ -17,5 +17,9 @@ class OutputLoggingCallback(OutputSumResetCallback):
             for key, sum in sums.items():
                 self._log_recursive(logger=logger, prefix=f'{prefix}/{key}', sums=sum, amounts=amounts,
                                     log_index=log_index)
+        elif isinstance(sums, (list, tuple)):
+            for key, sum in enumerate(sums):
+                self._log_recursive(logger=logger, prefix=f'{prefix}/{key}', sums=sum, amounts=amounts,
+                                    log_index=log_index)
         else:
             logger.add_scalar(prefix, sums / amounts, log_index)

@@ -12,7 +12,7 @@ from remove_norm import remove_module_weight_norms
 from generator import Generator
 from src.env import AttrDict
 from src.meldataset import MAX_WAV_VALUE, load_wav
-from static_configs import get_static_generator_config
+from static_configs import get_static_generator_configs
 from configurable_module import get_module_from_config
 
 device = None
@@ -35,7 +35,7 @@ def scan_checkpoint(cp_dir, prefix):
 
 
 def inference(a, h):
-    generator = get_module_from_config(get_static_generator_config()).to(device)
+    generator = get_module_from_config(get_static_generator_configs()).to(device)
 
     state_dict_g = load_checkpoint(a.checkpoint_file, device)
     generator.load_state_dict(state_dict_g['generator'])

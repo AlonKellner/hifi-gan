@@ -13,7 +13,7 @@ class Ensemble(torch.nn.Module):
         stacked = self.get_recursive_array_function(results, lambda res: torch.stack(res, dim=0))
         means = self.get_recursive_function(stacked, lambda res: res.mean(dim=0))
         variances = self.get_recursive_function(stacked, lambda res: res.var(dim=0))
-        return means, variances
+        return {'mean': means, 'variance': variances}
 
     def get_recursive_array_function(self, results, function):
         if isinstance(results[0], list):

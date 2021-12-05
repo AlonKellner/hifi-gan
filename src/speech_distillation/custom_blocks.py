@@ -176,7 +176,7 @@ class FeatureBlock(torch.nn.Module):
         x = self.model(*x)
         features = self.features
         self.features = []
-        return x, features
+        return {'output': x, 'features': features}
 
 
 class ProcessedFeatureBlock(FeatureBlock):
@@ -191,7 +191,7 @@ class ProcessedFeatureBlock(FeatureBlock):
         processed_features = [
             self.feature_models[index % len(self.feature_models)](feature) for index, feature in enumerate(features)
         ]
-        return x, processed_features
+        return {'output': x, 'features': processed_features}
 
 
 def get_modules(model, module_type, tags_to_find=None):

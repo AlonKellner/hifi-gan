@@ -3,21 +3,22 @@ from src.speech_distillation.static_configs import get_classifier_backbone
 import torch
 
 
-def generate_keepers_by_example(input_channels, example_item, cache_hook=lambda k, x: x(), hiddens=[]):
-    keepers_configs = generate_keepers_config_by_example(input_channels, example_item, hiddens=hiddens)
+def generate_keepers_by_example(input_channels, example_item, cache_hook=lambda k, x: x(), hiddens=[], groups=[1]):
+    keepers_configs = generate_keepers_config_by_example(input_channels, example_item, hiddens=hiddens, groups=groups)
     return torch.nn.ModuleDict(
         {key: get_module_from_config(cache_hook(key, lambda: keeper_config)) for key, keeper_config in
          keepers_configs.items()}
     )
 
 
-def generate_keepers_config_by_example(input_channels, grouped_examples, hiddens=[], ensemble_size=3):
+def generate_keepers_config_by_example(input_channels, grouped_examples, hiddens=[], groups=[1], ensemble_size=3):
     keepers = {
         key: ('ensemble', [
             generate_classifier_by_example(
                 input_channels,
                 {key2: value2 for key2, value2 in grouped_examples.items() if key == key2},
-                hiddens=hiddens
+                hiddens=hiddens,
+                groups=groups
             ) for i in range(ensemble_size)
         ])
         for key, example_item in grouped_examples.items()
@@ -49,7 +50,10 @@ def generate_hunters_config_by_example(input_channels, grouped_examples, hiddens
 
 
 def generate_classifier_by_example(input_channels, example, hiddens=[1092, 546, 364], groups=[1]):
-    label_groups = {ex_key: value for ex_key, value in example.items()}
+    label_groups = {
+        ex_key: {key: len(value) for key, value in label_group.items()}
+        for ex_key, label_group in example.items()
+    }
     groups_channels = {
         ex_key: sum(value for value in label_group.values())
         for ex_key, label_group in label_groups.items()

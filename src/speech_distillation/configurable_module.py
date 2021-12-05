@@ -16,6 +16,16 @@ from ensemble import Ensemble
 from generator import Encoder, Decoder
 
 
+def get_modules_from_configs(module_configs):
+    if isinstance(module_configs, dict):
+        return {key: get_module_from_config(module_config) for key, module_config in module_configs.items()}
+    elif isinstance(module_configs, list):
+        return [get_module_from_config(module_config) for module_config in module_configs]
+    elif isinstance(module_configs, tuple):
+        return (get_module_from_config(module_config) for module_config in module_configs)
+    return None
+
+
 def get_module_from_config(module_config):
     try:
         tags = []

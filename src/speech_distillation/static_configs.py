@@ -2,15 +2,14 @@ LRELU_SLOPE = 0.1
 
 
 def get_static_all_in_one_discriminator(expansion_size=1, ensemble_size=3):
-    return ('pfmap',
+    return ('fmap',
             (
                 ('ensemble',
                  [
                      get_static_single_all_in_one_discriminator_fmap(expansion_size) for i in range(ensemble_size)
                  ]
                  ),
-                ['all_in_one'],
-                [('tanh',)]
+                ['all_in_one']
             )
             )
 
@@ -117,80 +116,73 @@ def get_all_in_one_block_config(pre_channels, kernel_size, dilation, pre_scale, 
             )
 
 
-def get_static_generator_config(initial_skip_ratio=1, expansion_size=16):
-    embedding_tags = ['embeddings']
-    level5 = get_level5_model(initial_skip_ratio, 273 * expansion_size, embedding_tags=embedding_tags)
-    level4 = get_leveln_model(initial_skip_ratio, 'skip4', 'noise4', (21 * expansion_size, 13, 13, expansion_size),
-                              (273 * expansion_size, 3, 39), 31, level5)
-    level3 = get_leveln_model(initial_skip_ratio, 'skip3', 'noise3', (3 * expansion_size, 21, 7, 1),
-                              (21 * expansion_size, 13, 3), 31, level4)
-    level2 = get_leveln_model(initial_skip_ratio, 'skip2', 'noise2', (expansion_size, 33, 3, 1),
-                              (3 * expansion_size, 21, 1), 31, level3)
-    generator_config = get_level1_model(initial_skip_ratio, level2, expansion_size)
-    generator_config = ('fmap', (generator_config, embedding_tags))
-    return generator_config
+def get_static_generator_configs(expansion_size=16):
+    encoder5, decoder5 = get_level5_model(273 * expansion_size)
+
+    encoder4, decoder4 = get_leveln_model(
+        (21 * expansion_size, 13, 13, expansion_size),
+        (273 * expansion_size, 3, 39), 31,
+        encoder5, decoder5)
+
+    encoder3, decoder3 = get_leveln_model(
+        (3 * expansion_size, 21, 7, 1),
+        (21 * expansion_size, 13, 3), 31,
+        encoder4, decoder4)
+
+    encoder2, decoder2 = get_leveln_model(
+        (expansion_size, 33, 3, 1),
+        (3 * expansion_size, 21, 1), 31,
+        encoder3, decoder3)
+
+    encoder, decoder = get_level1_model(encoder2, decoder2, expansion_size)
+    return {'encoder': encoder, 'decoder': decoder}
 
 
-def get_leveln_model(initial_skip_ratio, skip_tag, anti_tag, out_params, mid_params, pool_reception, next_model):
+def get_leveln_model(out_params, mid_params, pool_reception, next_encode, next_decode):
     out_channels, out_kernel, out_stride, out_groups = out_params
     mid_channels, mid_kernel, mid_groups = mid_params
-    return \
-        get_decaying_block(
-            initial_skip_ratio, skip_tag, anti_tag, out_channels,
-            [
-                # ('conv', (out_channels, mid_channels, out_kernel, out_stride, 1, out_groups)),
-                ('roll', (out_stride,)),
-                get_res_block_config(mid_channels, mid_kernel, mid_groups),
-                ('lrelu', LRELU_SLOPE),
-                next_model,
-                ('lrelu', LRELU_SLOPE),
-                get_res_block_config(mid_channels, mid_kernel, mid_groups),
-                ('lrelu', LRELU_SLOPE),
-                ('sub_res',
-                 ('pool', (pool_reception, 1))
-                 ),
-                ('unroll', out_stride),
-                # ('trans', (mid_channels, out_channels, out_kernel, out_stride, 1, out_groups)),
-            ]
-        )
+
+    encoder = [
+        ('roll', (out_stride,)),
+        get_res_block_config(mid_channels, mid_kernel, mid_groups),
+        next_encode
+    ]
+    decoder = [
+        next_decode,
+        get_res_block_config(mid_channels, mid_kernel, mid_groups),
+        ('sub_res',
+         ('pool', (pool_reception, 1))
+         ),
+        ('unroll', out_stride)
+    ]
+    return encoder, decoder
 
 
-def get_level1_model(initial_skip_ratio, level2, expansion_size=16):
-    return \
-        [
-            ('sum', [
-                ('conv', (1, expansion_size, 63, 1, 1, 1, 'spectral')),
-                ('repl', expansion_size)
-            ]),
-            get_decaying_block(
-                initial_skip_ratio, 'skip1', 'noise1', expansion_size,
-                [
-                    ('lrelu', LRELU_SLOPE),
-                    get_res_block_config(expansion_size, 33),
-                    ('lrelu', LRELU_SLOPE),
-                    level2,
-                    ('lrelu', LRELU_SLOPE),
-                    get_res_block_config(expansion_size, 33),
-                    ('lrelu', LRELU_SLOPE),
-                ]
-            ),
-            ('sum', [
-                ('conv', (expansion_size, 1, 63, 1, 1)),
-                ('avg_ch',)
-            ]),
-            ('tanh',)
-        ]
+def get_level1_model(encoder2, decoder2, expansion_size=16):
+    encoder = [
+        ('sum', [
+            [('conv', (1, expansion_size, 63, 1, 1, 1, 'spectral')), ('lrelu', LRELU_SLOPE)],
+            ('repl', expansion_size)
+        ]),
+        get_res_block_config(expansion_size, 33),
+        encoder2
+    ]
+    decoder = [
+        decoder2,
+        get_res_block_config(expansion_size, 33),
+        ('sum', [
+            ('conv', (expansion_size, 1, 63, 1, 1)),
+            ('avg_ch',)
+        ]),
+        ('tanh',)
+    ]
+    return encoder, decoder
 
 
-def get_level5_model(initial_skip_ratio, channels, embedding_tags=[]):
-    return \
-        get_decaying_block(
-            initial_skip_ratio, 'skip5', 'noise5', channels,
-            [
-                ('split', {'content': channels // 2, 'style': channels // 2}, embedding_tags),
-                ('merge_dict',)
-            ]
-        )
+def get_level5_model(channels):
+    encoder = ('split', {'content': channels // 2, 'style': channels // 2})
+    decoder = ('merge_dict',)
+    return encoder, decoder
 
 
 def get_decaying_block(initial_skip_ratio, skip_tag, anti_tag, noise_channels, inner_block):
@@ -217,24 +209,12 @@ def get_decaying_block(initial_skip_ratio, skip_tag, anti_tag, noise_channels, i
 
 
 def get_res_block_config(channel_size, kernel_size, groups=1):
-    # return 'res', ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups))
     return ('res', [
         ('conv', (channel_size, channel_size, kernel_size, 1, 1, groups)),
         ('lrelu', LRELU_SLOPE),
         ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+        ('lrelu', LRELU_SLOPE),
     ])
-    # return [
-    #         ('res', [
-    #             ('conv', (channel_size, channel_size, kernel_size, 1, 1, groups)),
-    #             ('lrelu', LRELU_SLOPE),
-    #             ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
-    #         ]),
-    #         ('res', [
-    #             ('conv', (channel_size, channel_size, kernel_size, 1, 1, groups)),
-    #             ('lrelu', LRELU_SLOPE),
-    #             ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
-    #         ]),
-    #     ]
 
 
 def get_fusion_res_block_config(channel_size, kernel_size, groups=1):
@@ -288,12 +268,14 @@ def get_fusion_res_block_config(channel_size, kernel_size, groups=1):
 
 def get_classifier_backbone(input_channels, output_channels, hiddens, groups=[1]):
     layers = [input_channels, *hiddens, output_channels]
-    return [('conv', (layers[i], layers[i + 1], 3, 1, 1, groups[i % len(groups)])) for i in range(len(layers) - 1)]
+    return [[('conv', (layers[i], layers[i + 1], 3, 1, 1, groups[i % len(groups)])), ('lrelu', LRELU_SLOPE)] for i in
+            range(len(layers) - 1)]
 
 
-def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[1092, 546, 364], one_hot=False):
-    input_channels = sum(value for value in label_group.values())
-    other_label_groups = {ex_key: value for ex_key, value in example_item.items() if ex_key != key}
+def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[1092, 546, 364], groups=[1],
+                                       one_hot=False):
+    input_channels = sum(len(value) for value in label_group.values())
+    other_label_groups = {ex_key: {key2: len(value2) for key2, value2 in value.items()} for ex_key, value in example_item.items() if ex_key != key}
     other_groups_channels = {
         ex_key: sum(value for value in other_label_group.values())
         for ex_key, other_label_group in other_label_groups.items()
@@ -301,7 +283,7 @@ def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[
     output_channels = sum(other_groups_channels.values())
     layers = [
         ('merge_dict',),
-        get_classifier_backbone(input_channels, output_channels, hiddens),
+        get_classifier_backbone(input_channels, output_channels, hiddens, groups=groups),
         ('split', other_groups_channels),
         ('recursive', {group: ('split', sizes) for group, sizes in other_label_groups.items()}),
         ('recursive', {group: {key: ('softmax',) for key in sizes} for group, sizes in other_label_groups.items()}),
@@ -312,10 +294,12 @@ def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[
     return layers
 
 
-def generate_sniffers_configs_by_example(example_item, hiddens=[1092, 546, 364], ensemble_size=3, one_hot=False):
+def generate_sniffers_configs_by_example(example_item, hiddens=[1092, 546, 364], groups=[1], ensemble_size=3,
+                                         one_hot=False):
     sniffers = {
         key: ('ensemble', [
-            generate_sniffer_config_by_example(key, label_group, example_item, hiddens=hiddens, one_hot=one_hot)
+            generate_sniffer_config_by_example(key, label_group, example_item, hiddens=hiddens, groups=[1],
+                                               one_hot=one_hot)
             for i in range(ensemble_size)
         ])
         for key, label_group in example_item.items()

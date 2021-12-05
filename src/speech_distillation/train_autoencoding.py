@@ -19,7 +19,7 @@ import math
 
 from torchsummary import summary
 
-from static_configs import get_static_generator_config, \
+from static_configs import get_static_generator_configs, \
     get_static_all_in_one_discriminator
 from datasets import WaveDataset
 from configurable_module import get_module_from_config
@@ -37,7 +37,7 @@ def train(rank, a, h):
     torch.cuda.manual_seed(h.seed)
     device = torch.device('cuda:{:d}'.format(rank))
 
-    generator = get_module_from_config(get_static_generator_config()).to(device)
+    generator = get_module_from_config(get_static_generator_configs()).to(device)
     summary(generator,
             input_size=(1, h.segment_size),
             batch_size=h.batch_size)

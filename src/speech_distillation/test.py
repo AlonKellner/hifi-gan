@@ -20,7 +20,7 @@ import torch
 from torch.nn import functional as F
 from torchsummary import summary
 
-from static_configs import get_static_generator_config, get_level5_model, \
+from static_configs import get_static_generator_configs, get_level5_model, \
     get_leveln_model, get_res_block_config, get_static_all_in_one_discriminator
 from configurable_module import get_module_from_config
 
@@ -35,11 +35,11 @@ from configurable_module import get_module_from_config
 #         input_size=(16, 100),
 #         batch_size=1,
 #         device='cpu')
-# with open('config/config.json') as f:
-#     data = f.read()
-#
-# config_dict = json.loads(data)
-# h = AttrDict(config_dict)
+with open('config/config.json') as f:
+    data = f.read()
+
+config_dict = json.loads(data)
+h = AttrDict(config_dict)
 #
 # train_dataset = MultilabelWaveDataset(
 #         base_dir='/datasets',
@@ -68,18 +68,18 @@ from configurable_module import get_module_from_config
 #
 # result = keepers['style'](torch.randn((1, h.embedding_size, h.segment_size // h.embedding_size)))
 # print(result['style']['mic-brand'][0, :, 0].sum())
-
-size = (3, 5)
-dim = 0
-ground_truth = torch.randint(low=0, high=size[dim], size=(*size[:dim], *size[dim+1:]))
-x = torch.randint(low=0, high=size[dim], size=(*size[:dim], *size[dim+1:]))
-x = F.one_hot(x, size[dim]).transpose(-1, dim)
-# logits = torch.randn(size)
-# x = torch.softmax(logits, dim=0)
-target = torch.softmax(torch.randn(size), dim=0)
-value = bias_corrected_cross_entropy_loss(x, target, ground_truth, dim=dim)
-print(value)
 #
+# size = (3, 5)
+# dim = 0
+# ground_truth = torch.randint(low=0, high=size[dim], size=(*size[:dim], *size[dim+1:]))
+# x = torch.randint(low=0, high=size[dim], size=(*size[:dim], *size[dim+1:]))
+# x = F.one_hot(x, size[dim]).transpose(-1, dim)
+# # logits = torch.randn(size)
+# # x = torch.softmax(logits, dim=0)
+# target = torch.softmax(torch.randn(size), dim=0)
+# value = bias_corrected_cross_entropy_loss(x, target, ground_truth, dim=dim)
+# print(value)
+# #
 # discriminator = get_module_from_config(get_static_all_in_one_discriminator(8))
 # summary(discriminator,
 #         input_size=(1, h.segment_size),
@@ -104,51 +104,64 @@ print(value)
 #
 # result = parse_textgrid(subdir, textgrid_pattern)
 # print(result)
+
+train_dataset = MultilabelWaveDataset(
+    base_dir='/datasets',
+    dir='/datasets/training_audio',
+    name='train',
+    config_path='**/train_data_config/*.json',
+    segment_size=h.segment_size,
+    sampling_rate=h.sampling_rate,
+    embedding_size=h.embedding_size,
+    augmentation_config=config_dict['augmentation']
+)
+
+validation_dataset = MultilabelWaveDataset(
+    base_dir='/datasets',
+    dir='/datasets/training_audio',
+    name='train',
+    config_path='**/train_data_config/*.json',
+    segment_size=h.validation_segment_size,
+    sampling_rate=h.sampling_rate,
+    embedding_size=h.embedding_size,
+    augmentation_config=config_dict['augmentation'],
+    deterministic=True,
+    size=h.validation_amount
+)
+
+test_dataset = MultilabelWaveDataset(
+    base_dir='/datasets',
+    dir='/datasets/training_audio',
+    name='test',
+    config_path='**/test_data_config/*.json',
+    segment_size=h.validation_segment_size,
+    sampling_rate=h.sampling_rate,
+    embedding_size=h.embedding_size,
+    deterministic=True,
+    augmentation_config=config_dict['augmentation']
+)
+# torch.set_printoptions(profile='full')
+# print(train_dataset.get_fresh_label(0))
+# print(test_dataset.get_fresh_label(0))
+
+# print(len(train_dataset))
+# for i, item in enumerate(train_dataset):
+#     if i % 100 == 0:
+#         print(i)
+# print('train finished!')
 #
-# train_dataset = MultilabelWaveDataset(
-#     base_dir='/datasets',
-#     dir='/datasets/training_audio',
-#     name='train',
-#     config_path='**/train_data_config/*.json',
-#     segment_size=h.segment_size,
-#     sampling_rate=h.sampling_rate,
-#     embedding_size=h.embedding_size,
-#     augmentation_config=json_config['augmentation']
-# )
-#
-# validation_dataset = MultilabelWaveDataset(
-#     base_dir='/datasets',
-#     dir='/datasets/training_audio',
-#     name='train',
-#     config_path='**/train_data_config/*.json',
-#     segment_size=h.segment_size,
-#     sampling_rate=h.sampling_rate,
-#     embedding_size=h.embedding_size,
-#     augmentation_config=json_config['augmentation'],
-#     deterministic=True,
-#     size=1000
-# )
-#
-# test_dataset = MultilabelWaveDataset(
-#     base_dir='/datasets',
-#     dir='/datasets/training_audio',
-#     name='test',
-#     config_path='**/test_data_config/*.json',
-#     segment_size=h.segment_size,
-#     sampling_rate=h.sampling_rate,
-#     embedding_size=h.embedding_size,
-#     deterministic=True,
-#     augmentation_config=json_config['augmentation']
-# )
-# #
-# # # torch.set_printoptions(profile='full')
-# # # print(dataset.get_pickle_item(0))
-# #
-# # # with Pool(16) as pool:
-# # #     results = pool.map(train_dataset.get_pickle_item, range(len(train_dataset)))
-# #
-# # # with Pool(16) as pool:
-# # #     results = pool.map(test_dataset.get_pickle_item, range(len(test_dataset)))
+# print(len(test_dataset))
+# for i, item in enumerate(test_dataset):
+#     if i % 100 == 0:
+#         print(i)
+# print('test finished!')
+
+
+with Pool(16) as pool:
+    pool.map(train_dataset.create_pickle_label, range(len(train_dataset)))
+
+with Pool(16) as pool:
+    pool.map(test_dataset.create_pickle_label, range(len(test_dataset)))
 # index = 0
 # print('train')
 # for i, item in enumerate(train_dataset):

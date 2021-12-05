@@ -1,29 +1,26 @@
-from datetime import datetime, timedelta
-
-import pandas as pd
-from tgt.io import read_textgrid
-import tgt
 from pathlib import Path
-import numpy as np
+
+from textgrid import TextGrid, IntervalTier
+import pandas as pd
+
 from complex_data_parser import get_path_by_glob
 
 
 def parse_textgrid(subdir, textgrid_pattern):
     textgrid_path = get_path_by_glob(subdir, textgrid_pattern)
-    textgrid = read_textgrid(str(textgrid_path))
-    tiers = textgrid.tiers
+    path_str = str(textgrid_path)
+    textgrid = TextGrid.fromFile(path_str)
     return {
-        tier.name: get_annotations_dataframe(tier) for tier in tiers
+        tier.name: get_annotations_dataframe(tier) for tier in textgrid if isinstance(tier, IntervalTier)
     }
 
 
 def get_annotations_dataframe(tier):
-    annotations = tier.annotations
     rows = [{
-                'start': annotation.start_time,
-                'end': annotation.end_time,
-                'text': annotation.text
-            } for annotation in annotations]
+                'start': interval.minTime,
+                'end': interval.maxTime,
+                'text': interval.mark
+            } for interval in tier.intervals]
     result_data_frame = pd.DataFrame(rows)
     return result_data_frame
 

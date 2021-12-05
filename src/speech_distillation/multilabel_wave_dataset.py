@@ -66,15 +66,44 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
             os.mkdir(cache_path)
         self.files_with_labels = self.do_with_pickle_cache(lambda: self.get_files_with_labels(dir, config_path),
                                                            os.path.join(dir, name, 'files_with_labels.pickle'))
-        self.label_options = self.do_with_pickle_cache(self.get_all_label_options,
-                                                       os.path.join(dir, name, 'label_options.pickle'))
+        if self.size is None:
+            self.size = len(self.files_with_labels)
+
+        self.label_options_weights = self.do_with_pickle_cache(self.get_all_label_options_weights,
+                                                               os.path.join(dir, name, 'label_options_weights.pickle'))
+        base_prob = self.aug_probs['prob']
+        sub_probs = self.aug_probs['sub_probs']
         for augmentation, augmentation_labels in self.aug_options.items():
-            self.label_options[augmentation] = list({'none', *augmentation_labels})
+            sub_prob = sub_probs[augmentation]['prob']
+            option_prob = 1.0/len(augmentation_labels)
+            self.label_options_weights[augmentation] = {'none': base_prob*(1-sub_prob), **{
+                label: base_prob*sub_prob*option_prob for label in augmentation_labels
+            }}
 
         all_label_groups = {key: [*label_groups[key], *augmentation_label_groups[key]] for key in label_groups.keys()}
-        self.label_option_groups = {
-            key: {label: len(self.label_options[label]) for label in label_group}
+        self.label_options_weights_groups = {
+            key: {label: self.label_options_weights[label] for label in label_group}
             for key, label_group in all_label_groups.items()
+        }
+
+        self.label_options_groups = {
+            key: {label: tuple(value.keys()) for label, value in label_group.items()}
+            for key, label_group in self.label_options_weights_groups.items()
+        }
+
+        self.label_options = {
+            key: tuple(label_group.keys())
+            for key, label_group in self.label_options_weights.items()
+        }
+
+        self.label_weights_groups = {
+            key: {label: tuple(value.values()) for label, value in label_group.items()}
+            for key, label_group in self.label_options_weights_groups.items()
+        }
+
+        self.label_weights = {
+            key: tuple(label_group.values())
+            for key, label_group in self.label_options_weights.items()
         }
 
         if self.should_augment:
@@ -88,8 +117,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                 'hilbert': HilbertAugmentor(self.sampling_rate).augment
             }
 
-        if self.size is None:
-            self.size = len(self.files_with_labels)
         print('Dataset [{}] is ready!\n'.format(self.name))
 
     @staticmethod
@@ -99,47 +126,65 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
             with open(pickle_path, 'rb') as pickle_file:
                 result = pickle.load(pickle_file)
         else:
+            if not pickle_path.parent.exists():
+                pickle_path.parent.mkdir(parents=True, exist_ok=True)
             result = func()
             with open(pickle_path, 'wb') as pickle_file:
                 pickle.dump(result, pickle_file)
         return result
 
-    def get_all_label_options(self):
+    @staticmethod
+    def create_pickle_cache(func, pickle_path):
+        pickle_path = Path(pickle_path)
+        if not pickle_path.exists():
+            if not pickle_path.parent.exists():
+                pickle_path.parent.mkdir(parents=True, exist_ok=True)
+            result = func()
+            with open(pickle_path, 'wb') as pickle_file:
+                pickle.dump(result, pickle_file)
+
+    def get_all_label_options_weights(self):
         all_label_options = {}
         for col in labels_to_use:
-            all_label_options[col] = set(self.files_with_labels[col].unique())
+            all_label_options[col] = dict(self.files_with_labels[col].value_counts(normalize=True))
 
         with Pool(16) as pool:
             for label in timed_labels_to_use:
-                all_label_options[label] = set()
-            results = pool.map(self.get_uniques_timed_labels_by_index, range(len(self)))
+                all_label_options[label] = dict()
+            results = pool.map(self.get_timed_labels_value_counts_by_index, range(len(self)))
         rows_to_remove = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 rows_to_remove.append(i)
             else:
                 for label in timed_labels_to_use:
-                    all_label_options[label].update(result[label])
+                    for key, value in result[label].items():
+                        if key not in all_label_options[label]:
+                            all_label_options[label][key] = 0
+                        all_label_options[label][key] += value
+        for label in timed_labels_to_use:
+            for key in all_label_options[label]:
+                all_label_options[label][key] /= len(results)
         if len(rows_to_remove) > 0:
             self.files_with_labels = self.files_with_labels.drop(rows_to_remove).reset_index(drop=True)
             pickle_path = os.path.join(self.dir, self.name, 'files_with_labels.pickle')
             with open(pickle_path, 'wb') as pickle_file:
                 pickle.dump(self.files_with_labels, pickle_file)
-        all_label_options = {label: list(value) for label, value in all_label_options.items()}
-        return all_label_options
+        all_label_options_weights = all_label_options
+        return all_label_options_weights
 
-    def get_uniques_timed_labels_by_index(self, i):
+    def get_timed_labels_value_counts_by_index(self, i):
         try:
             labels, timed_labels = self.get_timed_labels(i)
-            return self.get_unique_labels(timed_labels)
+            return self.get_labels_value_counts(timed_labels)
         except Exception as e:
             print('Item {} failed to get timed labels: [{}]'.format(i, e))
             return e
 
-    def get_unique_labels(self, timed_labels):
+    def get_labels_value_counts(self, timed_labels):
         result = {}
         for label in timed_labels_to_use:
-            result[label] = set(timed_labels[label]['text'].unique())
+            result[label] = dict(timed_labels[label]['text'].value_counts(normalize=True))
         return result
 
     def get_files_with_labels(self, main_dir, config_path):
@@ -194,6 +239,12 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         if self.should_augment:
             wav, time_labels, grouped_labels = self.augment_item(wav, time_labels, grouped_labels)
         return wav, wav_path, time_labels, grouped_labels
+
+    def create_pickle_label(self, index):
+        return self.create_pickle_cache(
+            lambda: self.get_fresh_label(index),
+            os.path.join(self.dir, self.name, 'labels_cache', '{}.pickle'.format(index))
+        )
 
     def get_pickle_label(self, index):
         return self.do_with_pickle_cache(
@@ -251,22 +302,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
             all_tensors[key] = tensors
         return all_tensors
 
-    def get_cut_wav(self, index):
-        wav = self.get_wav(index)
-        (length,) = wav.size()
-        embedded_segment_size = self.segment_size // self.embedding_size
-        embedded_length = length // self.embedding_size
-        if embedded_length >= embedded_segment_size:
-            max_embedded_start = embedded_length - embedded_segment_size
-            embedded_start = self.random.randint(0, max_embedded_start)
-            start = embedded_start * self.embedding_size
-
-        if length >= self.segment_size:
-            wav = wav[start:start + self.segment_size]
-        else:
-            wav = torch.nn.functional.pad(wav, (self.segment_size - length), 'constant')
-        return wav
-
     def get_wav(self, index):
         wav_path = get_path_by_glob(self.dir, self.files_with_labels.iloc[[index]].squeeze()['wav'])
         if self.disable_wavs:
@@ -306,7 +341,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
             padding = embedded_padding * self.embedding_size
             prefix_padding = prefix_embedded_padding * self.embedding_size
             postfix_padding = postfix_embedded_padding * self.embedding_size
-            # print('pad: ', prefix_padding, postfix_padding, prefix_embedded_padding, postfix_embedded_padding, trimed_length)
 
         for key, group in pickle_label_groups.items():
             for label, label_item in group.items():
@@ -317,7 +351,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                     cut_label_item = torch.nn.functional.pad(label_item,
                                                              (prefix_embedded_padding, postfix_embedded_padding),
                                                              'constant')
-                    # print(label, label_item.size(), cut_label_item.size())
                 group[label] = cut_label_item
 
         if length >= self.segment_size:

@@ -50,6 +50,8 @@ class OutputSumCallback(Callback):
             batch_idx: int,
             dataloader_idx: int,
     ):
+        if isinstance(outputs, tuple) and len(outputs) == 2:
+            outputs, data = outputs
         loss_sum = self.loss_sums[batch_type]
         loss_amount = self.loss_amounts[batch_type]
         if loss_sum is None:

@@ -6,11 +6,14 @@ import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
 
 from src.speech_distillation.best_checkpoint_callback import BestCheckpointCallback
+from src.speech_distillation.confusion_logging_callback import ConfusionLoggingCallback
+from src.speech_distillation.gan_models_graph_visualization_callback import GanModelsGraphVisualizationCallback
 from src.speech_distillation.global_sync_callback import GlobalSyncCallback
-from src.speech_distillation.global_sync_lr_scheduler import GlobalSyncDecoratorLR, GlobalSyncExponentialLR
-from src.speech_distillation.label_bias_sniffer import generate_sniffers_by_example, LabelBiasSniffer
+from src.speech_distillation.global_sync_lr_scheduler import GlobalSyncExponentialLR
+from src.speech_distillation.label_bias_sniffer import generate_sniffers_by_example
 from src.speech_distillation.output_sum_callback import OutputSumCallback
-from src.speech_distillation.yaml_utils import do_and_cache
+from src.speech_distillation.validation_classification_callback import ValidationClassificationCallback
+from src.speech_distillation.yaml_utils import do_and_cache, do_and_cache_dict
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import argparse
@@ -24,15 +27,14 @@ from src.speech_distillation.continuous_checkpoint_callback import ContinuousChe
 from src.speech_distillation.history_checkpoint_callback import HistoryCheckpointCallback
 from src.speech_distillation.output_logging_callback import OutputLoggingCallback
 from src.speech_distillation.manual_optimization_callback import ManualOptimizationCallback
-from src.speech_distillation.valve_decay_callback import ValveDecayCallback
-from src.speech_distillation.gan_validation_visualization_callback import \
-    GanValidationVisualizationCallback
+from src.speech_distillation.validation_visualization_callback import \
+    ValidationVisualizationCallback
 
-from torchsummary import summary, InputSize, RandInt
+from torchsummary import summary, InputSize
 
-from static_configs import get_static_generator_config, \
+from static_configs import get_static_generator_configs, \
     get_static_all_in_one_discriminator
-from configurable_module import get_module_from_config
+from configurable_module import get_module_from_config, get_modules_from_configs
 from custom_losses import recursive_loss, get_losses_by_types
 
 torch.backends.cudnn.benchmark = True
@@ -43,11 +45,12 @@ from embedding_classifiers.embedding_classifiers_static_configs import generate_
 
 class GanAutoencoder(pl.LightningModule):
     def __init__(self,
-                 generator,
+                 generator, encoder, decoder,
                  discriminator, discriminator_copy,
                  keepers,
                  hunters, hunters_copies,
                  sniffers,
+                 label_weights,
                  config, args, config_dict):
         super().__init__()
         self.automatic_optimization = False
@@ -55,9 +58,12 @@ class GanAutoencoder(pl.LightningModule):
 
         self.learning_rates = config_dict['learning_rates']
         self.loss_factors = config_dict['loss_factors']
+        self.loss_backward = config_dict['loss_backward']
         self.losses = get_losses_by_types(config_dict['loss_funcs'])
 
         self.generator = generator
+        self.encoder = encoder
+        self.decoder = decoder
         self.discriminator = discriminator
         self.discriminator_copy = discriminator_copy
         self.keepers = keepers
@@ -72,6 +78,7 @@ class GanAutoencoder(pl.LightningModule):
             'sniffers': self.sniffers
         }
         self.flat_learning_models = self._create_flat_models(self.learning_models)
+        self.label_weights = label_weights
 
         self.config = config
         self.args = args
@@ -103,7 +110,45 @@ class GanAutoencoder(pl.LightningModule):
         return self.flat_learning_models
 
     def forward(self, x):
-        return self.generator(x)
+        wav, wav_path, time_labels, labels = x
+        wav = wav.unsqueeze(1)
+        embeddings = self.encoder(wav)
+        wav_generated = self.decoder(embeddings)
+        wav_diff = wav - wav_generated
+        wav_generated_mel, wav_mel, wav_diff_mel = self.get_mel_spectrograms(wav_generated, wav, wav_diff)
+        wav_mel_diff_inverse = wav_mel - wav_generated_mel
+
+        wav_discrimination = self.discriminator(wav)['output']['mean']['output']
+        wav_generated_discrimination = self.discriminator(wav_generated)['output']['mean']['output']
+
+        keepers_outputs = {key: self.keepers[key](value) for key, value in embeddings.items()}
+        sniffers_outputs = {key: self.sniffers[key](value['mean'][key]) for key, value in keepers_outputs.items()}
+        hunters_outputs = {key: self.hunters[key](value) for key, value in embeddings.items()}
+
+        results = {
+            'wavs': {
+                'original': wav,
+                'generated': wav_generated,
+                'diff': wav_diff
+            },
+            'mels': {
+                'original': wav_mel,
+                'generated': wav_generated_mel,
+                'diff': wav_diff_mel,
+                'inverse_diff': wav_mel_diff_inverse,
+            },
+            'discs': {
+                'original': wav_discrimination,
+                'generated': wav_generated_discrimination
+            },
+            'labels': {
+                'keeps': keepers_outputs,
+                'sniffs': sniffers_outputs,
+                'hunts': hunters_outputs
+            },
+        }
+        results = self._detach_recursively(results)
+        return results
 
     def configure_optimizers(self):
         optimizers = self._models_to_optimizers(self.learning_models, self.learning_rates)
@@ -132,43 +177,126 @@ class GanAutoencoder(pl.LightningModule):
                 amsgrad=True
             )]
 
+    def _extract_labels(self, all_args, index):
+        result = {
+            key1: {
+                key2: {
+                    key3: args3[index]
+                    for key3, args3 in args2.items()
+                } for key2, args2 in args1.items()
+            } for key1, args1 in all_args.items()
+        }
+        result = {group_name2: group2 for group_name, group in result.items()
+                  for group_name2, group2 in group.items()}
+        return result
+
+    def transform_data(self, data):
+        output = {}
+
+        wav_generated, wav_truth = data['generator']['reconstruction']['wav']
+        wav_diff = wav_generated - wav_truth
+        output['wav'] = {
+            'truth': wav_truth,
+            'generated': wav_generated,
+            'diff': wav_diff
+        }
+
+        mel_generated, mel_truth = data['generator']['reconstruction']['mel']
+        mel_diff = mel_generated - mel_truth
+        mel_wav_diff = self.get_mel_spectrogram(wav_diff)
+        output['mel'] = {
+            'truth': mel_truth,
+            'generated': mel_generated,
+            'diff': mel_diff,
+            'wav_diff': mel_wav_diff
+        }
+
+        disc = data['discriminator']
+        main_generated, main_truth = disc['main']['generated'], disc['main']['truth']
+        main_diff = main_generated - main_truth
+        sub_generated, sub_truth = disc['sub']['generated'], disc['sub']['truth']
+        sub_diff = [sub_g - sub_t for sub_g, sub_t in zip(sub_generated, sub_truth)]
+        output['disc'] = {
+            'main': {
+                'generated': main_generated,
+                'on-truth': main_truth,
+                'diff': main_diff
+            },
+            'sub': {
+                'generated': sub_generated,
+                'on-truth': sub_truth,
+                'diff': sub_diff
+            }
+        }
+
+        hunters = data['hunters']
+        keepers = data['generator']['keepers']
+        sniffers = data['sniffers']
+        label_truth = self._extract_labels(hunters, 1)
+        label_keep = self._extract_labels(keepers, 0)
+        label_sniff = self._extract_labels(sniffers, 0)
+        label_hunt = self._extract_labels(hunters, 0)
+        output['label'] = {
+            'truth': label_truth,
+            'keep': label_keep,
+            'sniff': label_sniff,
+            'hunt': label_hunt
+        }
+
+        # output['embedding'] = {} TODO
+        return output
+
     def training_step(self, train_batch, batch_idx):
-        losses_dict = self.get_losses(train_batch, batch_idx, backprop=True)
+        losses_dict, _ = self.get_losses(train_batch, batch_idx, backprop=True, get_data=False)
         self._update_discriminator_copy()
         self._update_hunters_copies()
         return losses_dict
 
     def validation_step(self, val_batch, batch_idx):
-        losses_dict = self.get_losses(val_batch, batch_idx, backprop=False)
-        return losses_dict
+        losses_dict, data_dict = self.get_losses(val_batch, batch_idx, backprop=False, get_data=True)
+        return losses_dict, self.transform_data(data_dict)
 
-    def get_losses(self, batch, batch_idx, backprop=True):
+    def get_losses(self, batch, batch_idx, backprop=True, get_data=True):
         wav, wav_path, time_labels, labels = batch
         wav = wav.unsqueeze(1)
 
-        wav_generated, embeddings = self.generator(wav)
-        (embeddings,) = embeddings
-
-        reconstruction_data = self.get_reconstruction_data(wav_generated, wav)
-        adversarial_discriminator_data = self.get_adversarial_data(wav_generated, wav, self.discriminator_copy)
-        keepers_data = {'keepers': self.get_embeddings_data(embeddings, time_labels, self.keepers)}
-        adversarial_hunters_data = self.get_adversarial_hunting_data(embeddings, time_labels, self.hunters_copies,
-                                                                     self.keepers,
-                                                                     self.sniffers)
-        generator_data = self._merge_dicts(reconstruction_data, adversarial_discriminator_data, keepers_data,
-                                           adversarial_hunters_data)
+        embeddings = self.encoder(wav)
+        wav_generated = self.decoder(embeddings)
 
         detached_embeddings = self._detach_recursively(embeddings)
         detached_wav_generated = self._detach_recursively(wav_generated)
 
-        discriminator_data = self.get_discriminator_data(detached_wav_generated, wav,
-                                                         self.discriminator)
+        reconstruction_data = self.get_reconstruction_data(wav_generated, wav)
+        adversarial_discriminator_data = self.get_adversarial_data(
+            wav_generated, wav,
+            self.discriminator_copy
+        )
+        keepers_data = {'keepers': self.get_embeddings_data(
+            embeddings, time_labels, self.label_weights,
+            self.keepers
+        )}
+        adversarial_hunters_data = self.get_adversarial_hunting_data(
+            embeddings, detached_embeddings, time_labels, self.label_weights,
+            self.hunters_copies, self.keepers, self.sniffers
+        )
+        generator_data = self._merge_dicts(
+            reconstruction_data, adversarial_discriminator_data, keepers_data, adversarial_hunters_data
+        )
 
-        hunters_data = self.get_embeddings_data(detached_embeddings, time_labels,
-                                                self.hunters)
+        discriminator_data = self.get_discriminator_data(
+            detached_wav_generated, wav,
+            self.discriminator
+        )
 
-        sniffers_data = self.get_sniffers_data(detached_embeddings, time_labels, self.keepers,
-                                               self.sniffers)
+        hunters_data = self.get_embeddings_data(
+            detached_embeddings, time_labels, self.label_weights,
+            self.hunters
+        )
+
+        sniffers_data = self.get_sniffers_data(
+            detached_embeddings, time_labels, self.label_weights,
+            self.keepers, self.sniffers
+        )
 
         all_data = {
             'generator': generator_data,
@@ -176,48 +304,98 @@ class GanAutoencoder(pl.LightningModule):
             'hunters': hunters_data,
             'sniffers': sniffers_data
         }
-        all_losses = {}
-        for key, data in all_data.items():
-            current_losses_dict, current_losses_sum = self._calculate_losses(self.losses[key], self.loss_factors[key],
-                                                                             data, backprop=backprop)
-            all_losses[key] = current_losses_dict
-        return all_losses
+        if get_data:
+            all_losses, losses_sum, out_data = self._calculate_losses_and_data(
+                self.losses, self.loss_factors,
+                self.loss_backward, all_data,
+                backprop=backprop)
+        else:
+            out_data = None
+            all_losses, losses_sum = self._calculate_losses(
+                self.losses, self.loss_factors,
+                self.loss_backward, all_data,
+                backprop=backprop)
+        return all_losses, out_data
 
-    def _calculate_losses(self, loss, factor, data, backprop=True):
+    def _calculate_losses(self, loss, factor, backward, data, backprop=True):
         if isinstance(data, tuple) \
                 and len(data) == 2 \
                 and callable(data[0]) \
                 and isinstance(data[1], tuple):
-            data = data[0](*data[1])
-        if isinstance(loss, dict):
+            func, params = data
+            data = func(*params)
+        if isinstance(data, dict):
             losses_sum = 0
             losses = {}
-            for key in loss.keys():
-                current_losses, current_sum = self._calculate_losses(loss[key], factor[key], data[key],
-                                                                     backprop=backprop)
+            for key in data.keys():
+                current_losses, current_sum = self._calculate_losses(
+                    loss[key] if isinstance(loss, dict) else loss,
+                    factor[key] if isinstance(factor, dict) else factor,
+                    backward[key] if isinstance(backward, dict) else False,
+                    data[key], backprop=backprop)
                 losses[key] = current_losses
                 losses_sum = current_sum + losses_sum
             losses['total'] = losses_sum
-            return losses, losses_sum
         else:
-            current_loss = recursive_loss(loss, *data) * factor
-            if backprop:
-                self.manual_backward(current_loss, retain_graph=True)
-            current_loss = current_loss.detach()
-            loss_sum = current_loss
-            return current_loss, loss_sum
+            current_loss = recursive_loss(loss, *data)
+            current_loss = current_loss * factor
+            losses, losses_sum = current_loss, current_loss
 
-    def _detach_recursively(self, losses):
+        losses = self._detach_recursively(losses, cpu=True)
+        if isinstance(backward, bool) and backward:
+            if backprop:
+                self.manual_backward(losses_sum, retain_graph=True)
+            losses_sum = losses_sum.detach().cpu()
+        return losses, losses_sum
+
+    def _calculate_losses_and_data(self, loss, factor, backward, data, backprop=True):
+        if isinstance(data, tuple) \
+                and len(data) == 2 \
+                and callable(data[0]) \
+                and isinstance(data[1], tuple):
+            func, params = data
+            data = func(*params)
+        if isinstance(data, dict):
+            losses_sum = 0
+            losses = {}
+            for key in data.keys():
+                current_losses, current_sum, currunt_data = self._calculate_losses_and_data(
+                    loss[key] if isinstance(loss, dict) else loss,
+                    factor[key] if isinstance(factor, dict) else factor,
+                    backward[key] if isinstance(backward, dict) else False,
+                    data[key], backprop=backprop)
+                data[key] = currunt_data
+                losses[key] = current_losses
+                losses_sum = current_sum + losses_sum
+            losses['total'] = losses_sum
+        else:
+            current_loss = recursive_loss(loss, *data)
+            current_loss = current_loss * factor
+            losses, losses_sum = current_loss, current_loss
+
+        out_data = self._detach_recursively(data, cpu=True)
+        losses = self._detach_recursively(losses, cpu=True)
+        if isinstance(backward, bool) and backward:
+            if backprop:
+                self.manual_backward(losses_sum, retain_graph=True)
+            losses_sum = losses_sum.cpu().detach()
+        return losses, losses_sum, out_data
+
+    def _detach_recursively(self, losses, cpu=False):
         if isinstance(losses, dict):
             return {key: self._detach_recursively(loss) for key, loss in losses.items()}
         elif isinstance(losses, torch.Tensor):
-            return losses.detach()
+            if cpu:
+                losses = losses.cpu()
+            losses = losses.detach()
+            return losses
         else:
             return losses
 
     def _merge_dicts(self, *all_dicts):
         result_dict = {}
         for current_dict in all_dicts:
+            result_dict = self._merge_into(result_dict, current_dict)
             result_dict = self._merge_into(result_dict, current_dict)
         return result_dict
 
@@ -241,20 +419,29 @@ class GanAutoencoder(pl.LightningModule):
             self.config.fmin,
             self.config.fmax_for_loss)
 
-    def get_adversarial_hunting_data(self, embeddings, time_labels, hunters, keepers, sniffers):
-        def get(_embedding, _time_labels, _hunter, _keeper, _sniffer, _key):
+    def get_adversarial_hunting_data(self, embeddings, detached_embeddings, time_labels, weights, hunters, keepers, sniffers):
+        def get(_embedding, _detached_embedding, _time_labels, _weights, _hunter, _keeper, _sniffer, _key):
             with torch.no_grad():
-                time_labels_keeper_predictions = _keeper(_embedding)[0]
-                bias_labels = _sniffer(time_labels_keeper_predictions[_key])[0]
-            time_labels_predictions = _hunter(_embedding)[0]
-            return time_labels_predictions, bias_labels, _time_labels
+                time_labels_keeper_predictions = _keeper(_detached_embedding)['mean']
+                bias_labels = _sniffer(time_labels_keeper_predictions[_key])['mean']
+
+                time_labels_keeper_predictions = self._detach_recursively(time_labels_keeper_predictions)
+                bias_labels = self._detach_recursively(bias_labels)
+            time_labels_predictions = _hunter(_embedding)['mean']
+            return {
+                label: {
+                    label2: (time_labels_predictions[label][label2], bias2, _time_labels[label][label2], _weights[label][label2])
+                    for label2, bias2 in bias.items()
+                } for label, bias in bias_labels.items()
+            }
 
         hunt_data = {}
         for key, hunter in hunters.items():
             keeper = keepers[key]
             sniffer = sniffers[key]
             embedding = embeddings[key]
-            hunt_data[key] = get, (embedding, time_labels, hunter, keeper, sniffer, key)
+            detached_embedding = detached_embeddings[key]
+            hunt_data[key] = get, (embedding, detached_embedding, time_labels, weights, hunter, keeper, sniffer, key)
 
         data = {
             'adversarial': {
@@ -263,68 +450,102 @@ class GanAutoencoder(pl.LightningModule):
         }
         return data
 
-    def get_sniffers_data(self, embeddings, time_labels, keepers, sniffers):
-        def get(_embedding, _time_labels, _keeper, _sniffer, _key):
+    def get_sniffers_data(self, embeddings, time_labels, weights, keepers, sniffers):
+        def get(_embedding, _time_labels, _weights, _keeper, _sniffer, _key):
             with torch.no_grad():
-                time_labels_keeper_predictions = _keeper(_embedding)[0]
-            bias_labels = _sniffer(time_labels_keeper_predictions[_key])[0]
-            return bias_labels, _time_labels
+                time_labels_keeper_predictions = _keeper(_embedding)['mean']
+
+                time_labels_keeper_predictions = self._detach_recursively(time_labels_keeper_predictions)
+            bias_labels = _sniffer(time_labels_keeper_predictions[_key])['mean']
+            return {
+                label: {
+                    label2: (bias2, _time_labels[label][label2], _weights[label][label2])
+                    for label2, bias2 in bias.items()
+                } for label, bias in bias_labels.items()
+            }
 
         sniff_data = {}
         for key, sniffer in sniffers.items():
             keeper = keepers[key]
             embedding = embeddings[key]
-            sniff_data[key] = get, (embedding, time_labels, keeper, sniffer, key)
+            sniff_data[key] = get, (embedding, time_labels, weights, keeper, sniffer, key)
         return sniff_data
 
-    def get_embeddings_data(self, embeddings, time_labels, classifiers):
+    def get_embeddings_data(self, embeddings, time_labels, weights, classifiers):
+        def get(_embedding, _time_labels, _weights, _classifier):
+            classifications = _classifier(_embedding)['mean']
+            return {
+                key1: {
+                    key2: (classification2, _time_labels[key1][key2], _weights[key1][key2])
+                    for key2, classification2 in classification.items()
+                } for key1, classification in classifications.items()
+            }
+
         classification_data = {}
 
         for key, classifier in classifiers.items():
-            classification_data[key] = \
-                lambda _embedding, _time_labels, _classifier: \
-                    (_classifier(_embedding)[0], _time_labels), \
-                (embeddings[key], time_labels, classifier)
+            classification_data[key] = get, (embeddings[key], time_labels, weights, classifier)
         return classification_data
 
     def get_mel_spectrograms(self, *wavs):
-        return (self.get_mel_spectrogram(wav) for wav in wavs)
+        return tuple(self.get_mel_spectrogram(wav) for wav in wavs)
 
     def get_reconstruction_data(self, wav_generated, wav):
         return {
             'reconstruction': {
-                'wave': (wav_generated, wav),
+                'wav': (wav_generated, wav),
                 'mel': (self.get_mel_spectrograms, (wav_generated, wav))
             }
         }
 
     def get_discriminator_data(self, wav_generated, wav, discriminator):
         def get(_wav_generated, _wav, _discriminator):
-            wav_all_r = _discriminator(_wav)[0][0]
-            wav_d_r, wav_sub_d_r = wav_all_r
-            wav_all_g_detach = _discriminator(_wav_generated)[0][0]
-            wav_d_g_detach, wav_sub_d_g_detach = wav_all_g_detach
+            wav_all_r = _discriminator(_wav)['output']['mean']
+            wav_d_r, wav_sub_d_r = wav_all_r['output'], wav_all_r['features']
+            del wav_all_r
+            wav_all_g_detach = _discriminator(_wav_generated)['output']['mean']
+            wav_d_g_detach, wav_sub_d_g_detach = wav_all_g_detach['output'], wav_all_g_detach['features']
+            del wav_all_g_detach
 
-            wav_d_diff = wav_d_r - wav_d_g_detach
-            wav_sub_d_diff = [sub_d_r - sub_d_g for sub_d_r, sub_d_g in zip(wav_sub_d_r, wav_sub_d_g_detach)]
-
-            return [wav_d_diff, wav_sub_d_diff],
+            return {
+                'main': {
+                    'truth': wav_d_r,
+                    'generated': -wav_d_g_detach
+                },
+                'sub': {
+                    'truth': wav_sub_d_r,
+                    'generated': [-lo for lo in wav_sub_d_g_detach]
+                }
+            }
 
         return get, (wav_generated, wav, discriminator)
 
     def get_adversarial_data(self, wav_generated, wav, discriminator):
         def get(_wav_generated, _wav, _discriminator):
-            wav_mom_r, wav_fmap_r = _discriminator(_wav)
-            wav_all_r = wav_mom_r[0]
-            wav_d_r, wav_sub_d_r = wav_all_r
-            wav_mom_g, wav_fmap_g = _discriminator(_wav_generated)
-            wav_all_g = wav_mom_g[0]
-            wav_d_g, wav_sub_d_g = wav_all_g
+            wav_r = _discriminator(_wav)
+            wav_mom_r, wav_fmap_r = wav_r['output'], wav_r['features']
+            del wav_r
+            wav_all_r = wav_mom_r['mean']
+            wav_d_r, wav_sub_d_r = wav_all_r['output'], wav_all_r['features']
+            del wav_all_r
+            wav_g = _discriminator(_wav_generated)
+            wav_mom_g, wav_fmap_g = wav_g['output'], wav_g['features']
+            del wav_g
+            wav_all_g = wav_mom_g['mean']
+            wav_d_g, wav_sub_d_g = wav_all_g['output'], wav_all_g['features']
+            del wav_all_g
 
-            wav_d_diff = wav_d_r - wav_d_g
-            wav_sub_d_diff = [sub_d_r - sub_d_g for sub_d_r, sub_d_g in zip(wav_sub_d_r, wav_sub_d_g)]
             return {
-                'disc': ([wav_d_diff, wav_sub_d_diff],),
+                'disc': {
+                    'main': {
+                        'truth': wav_d_r,
+                        'generated': -wav_d_g
+                    },
+                    'sub': {
+                        'truth': wav_sub_d_r,
+                        'generated': [-lo for lo in wav_sub_d_g]
+                    }
+                },
                 'fmap': (wav_fmap_g, wav_fmap_r)
             }
 
@@ -356,12 +577,13 @@ def main():
         version=config_dict['version'],
         default_hp_metric=False)
     log_dir = Path(tb_logger.log_dir)
-    if not log_dir.exists():
-        log_dir.mkdir()
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     previous_config = os.path.join(tb_logger.log_dir, 'config.yaml')
     h_dict = do_and_cache(lambda: config_dict, previous_config)
     h = AttrDict(h_dict)
+
+    set_debug_apis(h.debug)
 
     train_dataset = MultilabelWaveDataset(
         base_dir='/datasets',
@@ -417,17 +639,18 @@ def main():
     if not model_configs_dir_path.exists():
         model_configs_dir_path.mkdir()
 
-    generator = get_module_from_config(
-        do_and_cache(
-            lambda: get_static_generator_config(
-                initial_skip_ratio=h.initial_skip_ratio,
+    generator_modules = get_modules_from_configs(
+        do_and_cache_dict(
+            lambda: get_static_generator_configs(
                 expansion_size=h.gen_expansion
             ),
-            os.path.join(model_configs_dir, 'generator.yaml')
+            os.path.join(model_configs_dir, '{}.yaml')
         )
     )
+    encoder, decoder = generator_modules['encoder'], generator_modules['decoder']
+    generator = torch.nn.Sequential(encoder, decoder)
     for p in generator.parameters():
-        p.data.fill_(1e-8)
+        p.data.copy_(p.data * h.gen_init_scale)
     print(f'generator:')
     summary(generator,
             input_size=(1, h.segment_size),
@@ -449,24 +672,18 @@ def main():
             batch_size=h.batch_size,
             device='cpu')
 
-    smart_classifier_hiddens = [1092, 546, 364]
-    dumb_classifier_hiddens = []
+    smart_classifier_hiddens = [546, 364]
+    smart_classifier_groups = [13, 1, 1, 1]
+    dumb_classifier_hiddens = [546, 364]
+    dumb_classifier_groups = [13, 1, 1, 1]
 
-    example_item = train_dataset.label_option_groups
+    example_item = train_dataset.label_options_groups
     embedding_dims = (h.embedding_size * h.gen_expansion) // 2
     keepers = generate_keepers_by_example(
         embedding_dims, example_item,
         lambda k, x: do_and_cache(x, os.path.join(model_configs_dir, f'{k}_keeper.yaml')),
-        hiddens=smart_classifier_hiddens
-    )
-    hunters = generate_hunters_by_example(
-        embedding_dims, example_item,
-        lambda k, x: do_and_cache(x, os.path.join(model_configs_dir, f'{k}_hunter.yaml')),
-        hiddens=smart_classifier_hiddens
-    )
-    hunters_copies = generate_hunters_by_example(
-        embedding_dims, example_item,
-        lambda k, x: do_and_cache(x, os.path.join(model_configs_dir, f'{k}_hunter.yaml'))
+        hiddens=dumb_classifier_hiddens,
+        groups=dumb_classifier_groups
     )
 
     for key, keeper in keepers.items():
@@ -476,6 +693,19 @@ def main():
                 batch_size=h.batch_size,
                 device='cpu')
 
+    hunters = generate_hunters_by_example(
+        embedding_dims, example_item,
+        lambda k, x: do_and_cache(x, os.path.join(model_configs_dir, f'{k}_hunter.yaml')),
+        hiddens=smart_classifier_hiddens,
+        groups=smart_classifier_groups
+    )
+    hunters_copies = generate_hunters_by_example(
+        embedding_dims, example_item,
+        lambda k, x: do_and_cache(x, os.path.join(model_configs_dir, f'{k}_hunter.yaml')),
+        hiddens=smart_classifier_hiddens,
+        groups=smart_classifier_groups
+    )
+
     for key, hunter in hunters.items():
         print(f'{key} hunter:')
         summary(hunter,
@@ -483,43 +713,31 @@ def main():
                 batch_size=h.batch_size,
                 device='cpu')
 
-    sniffers_version = 1
-    sniffers_experiment = 'default'
-    sniffers_checkpoint = 'best'
-    sniffers_log_dirs = {
-        key: f'/mount/sniffers/logs/{key}/{sniffers_experiment}/version_{sniffers_version}/' for key in example_item
-    }
     sniffers = generate_sniffers_by_example(
         example_item,
-        lambda k, x: do_and_cache(x, os.path.join(sniffers_log_dirs[k], 'model_configs', f'{k}_sniffer.yaml')),
-        hiddens=smart_classifier_hiddens
+        lambda k, x: do_and_cache(x, os.path.join(model_configs_dir, f'{k}_sniffer.yaml')),
+        hiddens=smart_classifier_hiddens,
+        groups=[1, 1, 1, 1, 1]
     )
-    # sniffers = torch.nn.ModuleDict({
-    #     key: LabelBiasSniffer.load_from_checkpoint(
-    #         os.path.join(sniffers_log_dirs[key], f'checkpoints/{sniffers_checkpoint}'),
-    #         sniffers=sniffers, sniffer_key=key
-    #     ).sniffer
-    #     for key in sniffers.keys()
-    # })
 
     for key, sniffer in sniffers.items():
         print('{} sniffer:'.format(key))
         input_size = InputSize(
-            {label: (h.segment_size // h.embedding_size,) for label, value in example_item[key].items()})
+            {label: (len(value), h.segment_size // h.embedding_size) for label, value in example_item[key].items()}
+        )
         summary(sniffer,
                 input_size=input_size,
                 batch_size=h.batch_size,
-                dtypes={label: RandInt(type=torch.LongTensor, high=value)
-                        for label, value in example_item[key].items()},
                 device='cpu')
 
     # model
     model = GanAutoencoder(
-        generator,
+        generator, encoder, decoder,
         discriminator, discriminator_copy,
         keepers,
         hunters, hunters_copies,
         sniffers,
+        train_dataset.label_weights_groups,
         h, a, h_dict
     )
 
@@ -531,43 +749,48 @@ def main():
             'train': h.accumulated_grad_batches,
             'validation': h.accumulated_grad_batches * 10
         },
-        h=h
+        h=h, h_dict=h_dict
     )
     trainer.fit(model, train_loader, validation_loader)
 
 
-def create_trainer(model, logger, intervals, h):
+def create_trainer(model, logger, intervals, h, h_dict):
     best_checkpoint_callback = BestCheckpointCallback()
+    callbacks = [
+        GlobalSyncCallback(),
+        HistoryCheckpointCallback(),
+        ContinuousCheckpointCallback(intervals['validation']),
+        best_checkpoint_callback,
+        ManualOptimizationCallback(h.accumulated_grad_batches, h.gradient_clip, scheduler_args=(model,)),
+        OutputSumCallback(
+            intervals,
+            reset_callbacks=[
+                OutputLoggingCallback(),
+                best_checkpoint_callback
+            ]
+        ),
+        ValidationVisualizationCallback({'few': h.visualizations_amount, 'once': 1}),
+        GanModelsGraphVisualizationCallback(),
+        ValidationClassificationCallback(intervals['validation'], reset_callbacks=[
+            ConfusionLoggingCallback()
+        ]),
+    ]
     return pl.Trainer(
         gpus=1,
         num_nodes=1,
         precision=32,
-        max_steps=1000000,
+        max_steps=100000,
         logger=logger,
         val_check_interval=intervals['validation'],
         num_sanity_val_steps=h.visualizations_amount,
-        callbacks=[
-            GlobalSyncCallback(),
-            HistoryCheckpointCallback(),
-            ContinuousCheckpointCallback(intervals['validation']),
-            best_checkpoint_callback,
-            ManualOptimizationCallback(h.accumulated_grad_batches, h.gradient_clip, scheduler_args=(model,)),
-            OutputSumCallback(
-                intervals,
-                reset_callbacks=[
-                    OutputLoggingCallback(),
-                    best_checkpoint_callback
-                ]
-            ),
-            ValveDecayCallback(
-                valves_config=h.valves,
-                valves_steps=h.accumulated_grad_batches,
-                initial_value=h.initial_skip_ratio
-            ),
-            GanValidationVisualizationCallback(h.visualizations_amount),
-            # GanModelsGraphVisualizationCallback()
-        ]
+        callbacks=callbacks
     )
+
+
+def set_debug_apis(state: bool = False):
+    torch.autograd.profiler.profile(enabled=state)
+    torch.autograd.profiler.emit_nvtx(enabled=state)
+    torch.autograd.set_detect_anomaly(mode=state)
 
 
 if __name__ == '__main__':
