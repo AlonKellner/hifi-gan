@@ -3,6 +3,7 @@ import math
 from pytorch_lightning.callbacks import Callback
 
 from custom_blocks import get_modules, ValveBlock
+from logging_utils import rank
 
 
 class ValveDecayCallback(Callback):
@@ -61,5 +62,5 @@ class ValveDecayCallback(Callback):
             for anti_valve_module in anti_valves_modules:
                 anti_valve_module.ratio = anti_ratio
             anti_valve_tag = self.valves_config[valve_tag]['anti']
-            sw.add_scalar(f'params/valves/{valve_tag}', ratio, pl_module.global_step)
-            sw.add_scalar(f'params/valves/{anti_valve_tag}', anti_ratio, pl_module.global_step)
+            sw.add_scalar(rank(f'params/valves/{valve_tag}'), ratio, pl_module.global_step)
+            sw.add_scalar(rank(f'params/valves/{anti_valve_tag}'), anti_ratio, pl_module.global_step)

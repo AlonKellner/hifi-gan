@@ -1,4 +1,5 @@
 from src.speech_distillation.output_sum_callback import OutputSumResetCallback
+from logging_utils import rank
 
 
 class OutputLoggingCallback(OutputSumResetCallback):
@@ -22,4 +23,4 @@ class OutputLoggingCallback(OutputSumResetCallback):
                 self._log_recursive(logger=logger, prefix=f'{prefix}/{key}', sums=sum, amounts=amounts,
                                     log_index=log_index)
         else:
-            logger.add_scalar(prefix, sums / amounts, log_index)
+            logger.add_scalar(rank(prefix), sums / amounts, log_index)

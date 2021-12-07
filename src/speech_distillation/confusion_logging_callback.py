@@ -2,6 +2,7 @@ import torch
 
 from src.speech_distillation.output_sum_callback import OutputSumResetCallback
 from src.utils import plot_matrix
+from logging_utils import rank
 
 
 class ConfusionLoggingCallback(OutputSumResetCallback):
@@ -46,15 +47,15 @@ class ConfusionLoggingCallback(OutputSumResetCallback):
         recall = torch.trace(matrix).item()
         sum = matrix.sum().item()
         recall = recall/sum
-        logger.add_scalar(f'{prefix}/recall', recall, log_index)
+        logger.add_scalar(rank(f'{prefix}/recall'), recall, log_index)
 
-        logger.add_figure(prefix, plot_matrix(matrix.squeeze().cpu().numpy()), log_index)
+        logger.add_figure(rank(prefix), plot_matrix(matrix.squeeze().cpu().numpy()), log_index)
 
     def _log_diff_matrix(self, logger, prefix, matrix, log_index):
         recall = torch.trace(matrix).item()
         recall = recall
-        logger.add_scalar(f'{prefix}/recall', recall, log_index)
+        logger.add_scalar(rank(f'{prefix}/recall'), recall, log_index)
 
-        logger.add_figure(prefix, plot_matrix(matrix.squeeze().cpu().numpy()), log_index)
+        logger.add_figure(rank(prefix), plot_matrix(matrix.squeeze().cpu().numpy()), log_index)
 
 

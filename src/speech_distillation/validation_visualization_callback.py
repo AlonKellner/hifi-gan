@@ -2,6 +2,7 @@ import torch
 from pytorch_lightning.callbacks import Callback
 
 from src.utils import plot_spectrogram, plot_categorical
+from logging_utils import rank
 
 
 class ValidationVisualizationCallback(Callback):
@@ -38,7 +39,7 @@ class ValidationVisualizationCallback(Callback):
         if self._check_to_log(batch_idx, 'parameters', 'once'):
             models = pl_module.get_learning_models()
             for name, model in models.items():
-                sw.add_histogram(f'parameters/{name}', torch.cat([p.detach().view(-1) for p in model.parameters()]),
+                sw.add_histogram(rank(f'parameters/{name}'), torch.cat([p.detach().view(-1) for p in model.parameters()]),
                                  pl_module.global_step)
 
     def visualize(self, trainer, pl_module, batch, batch_idx, dataloader_idx, sw, prefix, visualize, log_type, data,
@@ -107,20 +108,20 @@ class ValidationVisualizationCallback(Callback):
         return self.truth_to_log[key]
 
     def _visualize_wav(self, sw, pl_module, batch_idx, prefix, wav):
-        sw.add_audio(prefix, wav[0], pl_module.global_step,
+        sw.add_audio(rank(prefix), wav[0], pl_module.global_step,
                      pl_module.config.sampling_rate)
 
     def _visualize_mel(self, sw, pl_module, batch_idx, prefix, mel):
-        sw.add_figure(prefix, plot_spectrogram(mel[0].cpu().numpy()),
+        sw.add_figure(rank(prefix), plot_spectrogram(mel[0].cpu().numpy()),
                       pl_module.global_step)
 
     def _visualize_label(self, sw, pl_module, batch_idx, prefix, label):
         cat_label = self._cat_recursive(label)
-        sw.add_figure(prefix, plot_categorical(cat_label.squeeze().cpu().numpy()),
+        sw.add_figure(rank(prefix), plot_categorical(cat_label.squeeze().cpu().numpy()),
                       pl_module.global_step)
 
     def _visualize_output(self, sw, pl_module, batch_idx, prefix, output):
-        sw.add_histogram(prefix, output, pl_module.global_step)
+        sw.add_histogram(rank(prefix), output, pl_module.global_step)
 
     def _cat_recursive(self, label):
         if isinstance(label, dict):

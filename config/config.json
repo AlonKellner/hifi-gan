@@ -2,6 +2,7 @@
   "experiment_name": "libriadapt/baseline",
   "version": 0,
   "batch_size": 8,
+  "embedding_mixing_size": 8,
   "segment_size": 43680,
   "accumulated_grad_batches": 25,
   "gen_expansion": 8,

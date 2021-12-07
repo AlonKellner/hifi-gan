@@ -7,6 +7,7 @@ from pytorch_lightning import loggers as pl_loggers
 
 from src.speech_distillation.best_checkpoint_callback import BestCheckpointCallback
 from src.speech_distillation.confusion_logging_callback import ConfusionLoggingCallback
+from src.speech_distillation.cycle_calculator import calculate_cycles
 from src.speech_distillation.gan_models_graph_visualization_callback import GanModelsGraphVisualizationCallback
 from src.speech_distillation.global_sync_callback import GlobalSyncCallback
 from src.speech_distillation.global_sync_lr_scheduler import GlobalSyncExponentialLR
@@ -79,6 +80,8 @@ class GanAutoencoder(pl.LightningModule):
         }
         self.flat_learning_models = self._create_flat_models(self.learning_models)
         self.label_weights = label_weights
+
+        self.embedding_mixing_cycles = calculate_cycles(config.batch_size, config.embedding_mixing_size)
 
         self.config = config
         self.args = args
@@ -747,7 +750,7 @@ def main():
         logger=tb_logger,
         intervals={
             'train': h.accumulated_grad_batches,
-            'validation': h.accumulated_grad_batches * 10
+            'validation': h.accumulated_grad_batches * 20
         },
         h=h, h_dict=h_dict
     )

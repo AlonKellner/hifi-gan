@@ -7,9 +7,11 @@ from src.env import AttrDict, build_env
 from pathlib import Path
 
 from src.speech_distillation.custom_losses import bias_corrected_cross_entropy_loss
+from src.speech_distillation.cycle_calculator import calculate_cycles
 from src.speech_distillation.embedding_classifiers.embedding_classifiers_static_configs import \
     generate_keepers_by_example
 from src.speech_distillation.label_bias_sniffer import generate_sniffers_by_example
+from src.speech_distillation.tensor_utils import cycles_roll, expand_unroll
 from textgrid_parsing import parse_textgrid
 from multilabel_wave_dataset import MultilabelWaveDataset
 from multiprocessing import Pool
@@ -35,11 +37,11 @@ from configurable_module import get_module_from_config
 #         input_size=(16, 100),
 #         batch_size=1,
 #         device='cpu')
-with open('config/config.json') as f:
-    data = f.read()
-
-config_dict = json.loads(data)
-h = AttrDict(config_dict)
+# with open('config/config.json') as f:
+#     data = f.read()
+#
+# config_dict = json.loads(data)
+# h = AttrDict(config_dict)
 #
 # train_dataset = MultilabelWaveDataset(
 #         base_dir='/datasets',
@@ -104,42 +106,42 @@ h = AttrDict(config_dict)
 #
 # result = parse_textgrid(subdir, textgrid_pattern)
 # print(result)
-
-train_dataset = MultilabelWaveDataset(
-    base_dir='/datasets',
-    dir='/datasets/training_audio',
-    name='train',
-    config_path='**/train_data_config/*.json',
-    segment_size=h.segment_size,
-    sampling_rate=h.sampling_rate,
-    embedding_size=h.embedding_size,
-    augmentation_config=config_dict['augmentation']
-)
-
-validation_dataset = MultilabelWaveDataset(
-    base_dir='/datasets',
-    dir='/datasets/training_audio',
-    name='train',
-    config_path='**/train_data_config/*.json',
-    segment_size=h.validation_segment_size,
-    sampling_rate=h.sampling_rate,
-    embedding_size=h.embedding_size,
-    augmentation_config=config_dict['augmentation'],
-    deterministic=True,
-    size=h.validation_amount
-)
-
-test_dataset = MultilabelWaveDataset(
-    base_dir='/datasets',
-    dir='/datasets/training_audio',
-    name='test',
-    config_path='**/test_data_config/*.json',
-    segment_size=h.validation_segment_size,
-    sampling_rate=h.sampling_rate,
-    embedding_size=h.embedding_size,
-    deterministic=True,
-    augmentation_config=config_dict['augmentation']
-)
+#
+# train_dataset = MultilabelWaveDataset(
+#     base_dir='/datasets',
+#     dir='/datasets/training_audio',
+#     name='train',
+#     config_path='**/train_data_config/*.json',
+#     segment_size=h.segment_size,
+#     sampling_rate=h.sampling_rate,
+#     embedding_size=h.embedding_size,
+#     augmentation_config=config_dict['augmentation']
+# )
+#
+# validation_dataset = MultilabelWaveDataset(
+#     base_dir='/datasets',
+#     dir='/datasets/training_audio',
+#     name='train',
+#     config_path='**/train_data_config/*.json',
+#     segment_size=h.validation_segment_size,
+#     sampling_rate=h.sampling_rate,
+#     embedding_size=h.embedding_size,
+#     augmentation_config=config_dict['augmentation'],
+#     deterministic=True,
+#     size=h.validation_amount
+# )
+#
+# test_dataset = MultilabelWaveDataset(
+#     base_dir='/datasets',
+#     dir='/datasets/training_audio',
+#     name='test',
+#     config_path='**/test_data_config/*.json',
+#     segment_size=h.validation_segment_size,
+#     sampling_rate=h.sampling_rate,
+#     embedding_size=h.embedding_size,
+#     deterministic=True,
+#     augmentation_config=config_dict['augmentation']
+# )
 # torch.set_printoptions(profile='full')
 # print(train_dataset.get_fresh_label(0))
 # print(test_dataset.get_fresh_label(0))
@@ -156,12 +158,12 @@ test_dataset = MultilabelWaveDataset(
 #         print(i)
 # print('test finished!')
 
-
-with Pool(16) as pool:
-    pool.map(train_dataset.create_pickle_label, range(len(train_dataset)))
-
-with Pool(16) as pool:
-    pool.map(test_dataset.create_pickle_label, range(len(test_dataset)))
+#
+# with Pool(16) as pool:
+#     pool.map(train_dataset.create_pickle_label, range(len(train_dataset)))
+#
+# with Pool(16) as pool:
+#     pool.map(test_dataset.create_pickle_label, range(len(test_dataset)))
 # index = 0
 # print('train')
 # for i, item in enumerate(train_dataset):
@@ -196,3 +198,13 @@ with Pool(16) as pool:
 #         print(i)
 # print(index)
 # print(dataset)
+
+batch_size = 6
+mixing_size = 24
+cycles = calculate_cycles(batch_size, mixing_size)
+cycles = (batch_size, *cycles)
+a = torch.randn((batch_size, 2, 5))
+r = cycles_roll(a, cycles, dim=0)
+u = expand_unroll(a, sum(cycles), dim=0)
+print(r.size())
+print(u.size())

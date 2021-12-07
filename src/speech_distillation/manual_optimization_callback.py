@@ -1,5 +1,6 @@
 from pytorch_lightning.callbacks import Callback
 from torch.nn.utils import clip_grad_norm_
+from logging_utils import rank
 
 
 class ManualOptimizationCallback(Callback):
@@ -20,7 +21,7 @@ class ManualOptimizationCallback(Callback):
             if self.clip_value > 0:
                 for key, learning_model in learning_models.items():
                     norm = clip_grad_norm_(learning_model.parameters(), self.clip_value)
-                    sw.add_scalar(f'gradients/{key}', norm, pl_module.global_step)
+                    sw.add_scalar(rank(f'gradients/{key}'), norm, pl_module.global_step)
             optimizers = pl_module.optimizers()
             optimizers = optimizers if isinstance(optimizers, list) else [optimizers]
             for optimizer in optimizers:
@@ -34,4 +35,4 @@ class ManualOptimizationCallback(Callback):
                 current_model_name = learning_models_keys[index]
                 scheduler.step(*self.scheduler_args)
                 for index2, lr in enumerate(scheduler.get_lr()):
-                    sw.add_scalar(f'params/lr/{current_model_name}/{index2}', lr, pl_module.global_step)
+                    sw.add_scalar(rank(f'params/lr/{current_model_name}/{index2}'), lr, pl_module.global_step)
