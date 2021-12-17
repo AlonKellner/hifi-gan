@@ -1,189 +1,291 @@
 {
-  "experiment_name": "libriadapt/baseline",
-  "version": 0,
-  "batch_size": 8,
-  "embedding_mixing_size": 8,
-  "segment_size": 43680,
-  "accumulated_grad_batches": 25,
-  "gen_expansion": 8,
-  "disc_expansion": 1,
-  "lr_decay": 0.9995,
-  "learning_rates": {
-    "generator": 0.005,
-    "discriminator": 0.0005,
-    "keepers": {
-      "style": 0.005,
-      "content": 0.005
+  "experiment": {
+    "name": "libriadapt/mic-brand_sex_with_generation",
+    "version": 0
+  },
+  "loops": {
+    "train": {
+      "batch_size": 3,
+      "mix_size": 3,
+      "segment_length": 43680
     },
-    "hunters": {
-      "style": 0.005,
-      "content": 0.005
+    "validation": {
+      "batch_size": 3,
+      "mix_size": 3,
+      "segment_length": 109200
     },
-    "sniffers": {
-      "style": 0.005,
-      "content": 0.005
+    "test": {
+      "batch_size": 3,
+      "mix_size": 3,
+      "segment_length": 109200
     }
   },
-  "loss_factors": {
+  "models": {
     "generator": {
-      "reconstruction": {
-        "wav": 1,
-        "mel": 1
-      },
-      "adversarial": {
-        "discriminator": {
-          "disc": {
-            "main": 1,
-            "sub": 1
-          },
-          "fmap": 1
-        },
-        "hunters": {
-          "style": {
-            "content": {
-              "sex": 1,
-              "speaker": 1,
-              "phones": 1
-            }
-          },
-          "content": {
-            "style": {
-              "codec": 1,
-              "highpass": 1,
-              "lowpass": 1,
-              "hilbert": 1,
-              "reverb": 1,
-              "mic-brand": 1,
-              "noise": 1,
-              "rir": 1
-            }
-          }
-        }
-      },
-      "keepers": {
-        "style": {
-          "style": {
-            "codec": 1,
-            "highpass": 1,
-            "lowpass": 1,
-            "hilbert": 1,
-            "reverb": 1,
-            "mic-brand": 1,
-            "noise": 1,
-            "rir": 1
-          }
-        },
-        "content": {
-          "content": {
-            "sex": 1,
-            "speaker": 1,
-            "phones": 1
-          }
-        }
-      }
+      "expansion": 6,
+      "layers": [
+        "res,none:1,63,1,1,1",
+        "res,none:1,33,3,1,1",
+        "res,none:3,21,7,1,1",
+        "res,sub_res:21,13,13,1,1"
+      ],
+      "init_scale": 1e-02
     },
     "discriminator": {
-      "main": 1,
-      "sub": 1
+      "ensemble": 3,
+      "expansion": 1,
+      "layers": [
+        "roll:1,33,1",
+        "roll:1,21,5",
+        "roll:2,21,5",
+        "roll:3,13,5",
+        "roll:5,13,5",
+        "roll:8,9,5",
+        "all:13,9,5",
+        "roll:21,5,5",
+        "roll:33,3,5",
+        "all:54,1,5",
+        "roll:90,1,5",
+        "roll:144,33,1"
+      ]
+    },
+    "keepers": {
+      "ensemble": 3,
+      "layers": [
+        "conv:3,1,13",
+        "conv:3,1,3"
+      ]
     },
     "hunters": {
-      "style": {
-        "content": {
-          "sex": 1,
-          "speaker": 1,
-          "phones": 1
-        }
-      },
-      "content": {
-        "style": {
-          "codec": 1,
-          "highpass": 1,
-          "lowpass": 1,
-          "hilbert": 1,
-          "reverb": 1,
-          "mic-brand": 1,
-          "noise": 1,
-          "rir": 1
-        }
-      }
+      "ensemble": 3,
+      "layers": [
+        "conv:3,1,13",
+        "conv:3,1,3"
+      ]
     },
     "sniffers": {
-      "style": {
-        "content": {
-          "sex": 1,
-          "speaker": 1,
-          "phones": 1
-        }
-      },
-      "content": {
-        "style": {
-          "codec": 1,
-          "highpass": 1,
-          "lowpass": 1,
-          "hilbert": 1,
-          "reverb": 1,
-          "mic-brand": 1,
-          "noise": 1,
-          "rir": 1
-        }
-      }
+      "ensemble": 3,
+      "layers": [
+        "conv:3,1,13",
+        "conv:3,1,3"
+      ]
     }
   },
-  "loss_funcs": {
-    "generator": {
-      "reconstruction": {"wav":"l2", "mel": "l2"},
-      "adversarial": {
-        "discriminator": {
-          "disc": "+",
-          "fmap": "l2"
-        },
-        "hunters": "bias_ce"
+  "debug": false,
+  "learning": {
+    "lr_decay": 0.9998,
+    "learning_rates": {
+      "generator": 0.01,
+      "discriminator": 0.001,
+      "keepers": {
+        "style": 0.001,
+        "content": 0.001
       },
-      "keepers": "ce"
+      "hunters": {
+        "style": 0.001,
+        "content": 0.001
+      },
+      "sniffers": {
+        "style": 0.001,
+        "content": 0.001
+      }
     },
-    "discriminator": "-",
-    "hunters": "ce",
-    "sniffers": "ce"
-  },
-  "loss_backward": {
-    "generator": {
-      "reconstruction": {
-        "wav": true,
-        "mel": true
+    "loss_factors": {
+      "generator": {
+        "emb_recon": 1,
+        "raw_recon": {
+          "wav": 1,
+          "mel": 1
+        },
+        "adversarial": {
+          "discriminator": {
+            "disc": {
+              "main": 1,
+              "sub": 1
+            },
+            "fmap": 1
+          },
+          "hunters": {
+            "style": {
+              "content": {
+                "sex": 1,
+                "speaker": 0,
+                "phones": 0
+              }
+            },
+            "content": {
+              "style": {
+                "codec": 0,
+                "highpass": 0,
+                "lowpass": 0,
+                "hilbert": 0,
+                "reverb": 0,
+                "mic-brand": 1,
+                "noise": 0,
+                "rir": 0
+              }
+            }
+          }
+        },
+        "keepers": {
+          "style": {
+            "style": {
+              "codec": 0,
+              "highpass": 0,
+              "lowpass": 0,
+              "hilbert": 0,
+              "reverb": 0,
+              "mic-brand": 1,
+              "noise": 0,
+              "rir": 0
+            }
+          },
+          "content": {
+            "content": {
+              "sex": 1,
+              "speaker": 0,
+              "phones": 0
+            }
+          }
+        }
       },
-      "adversarial": {
-        "discriminator": true,
-        "hunters": {
+      "discriminator": {
+        "main": 1,
+        "sub": 1
+      },
+      "hunters": {
+        "style": {
+          "content": {
+            "sex": 1,
+            "speaker": 0,
+            "phones": 0
+          }
+        },
+        "content": {
+          "style": {
+            "codec": 0,
+            "highpass": 0,
+            "lowpass": 0,
+            "hilbert": 0,
+            "reverb": 0,
+            "mic-brand": 1,
+            "noise": 0,
+            "rir": 0
+          }
+        }
+      },
+      "sniffers": {
+        "style": {
+          "content": {
+            "sex": 1,
+            "speaker": 0,
+            "phones": 0
+          }
+        },
+        "content": {
+          "style": {
+            "codec": 0,
+            "highpass": 0,
+            "lowpass": 0,
+            "hilbert": 0,
+            "reverb": 0,
+            "mic-brand": 1,
+            "noise": 0,
+            "rir": 0
+          }
+        }
+      }
+    },
+    "loss_funcs": {
+      "generator": {
+        "emb_recon": "l1",
+        "raw_recon": {
+          "wav": "l1",
+          "mel": "l1"
+        },
+        "adversarial": {
+          "discriminator": {
+            "disc": "+",
+            "fmap": "l1"
+          },
+          "hunters": "bias_ce"
+        },
+        "keepers": "ce"
+      },
+      "discriminator": "-",
+      "hunters": "ce",
+      "sniffers": "ce"
+    },
+    "loss_backward": {
+      "generator": {
+        "emb_recon": true,
+        "raw_recon": {
+          "wav": true,
+          "mel": true
+        },
+        "adversarial": {
+          "discriminator": true,
+          "hunters": {
+            "content": true,
+            "style": true
+          }
+        },
+        "keepers": {
           "content": true,
           "style": true
         }
       },
-      "keepers": {
+      "discriminator": true,
+      "hunters": {
+        "content": true,
+        "style": true
+      },
+      "sniffers": {
         "content": true,
         "style": true
       }
     },
-    "discriminator": true,
-    "hunters": {
-      "content": true,
-      "style": true
+    "accumulated_grad_batches": 25,
+    "gradient_clip": 1e05,
+    "adam_b1": 0.8,
+    "adam_b2": 0.99
+  },
+  "visualize": 1,
+  "data": {
+    "train": {
+      "dataset": {
+        "source": "train"
+      },
+      "loader": {
+        "shuffle": true,
+        "workers": 12
+      }
     },
-    "sniffers": {
-      "content": true,
-      "style": true
+    "validation": {
+      "dataset": {
+        "source": "train",
+        "deterministic": true,
+        "size": 100
+      },
+      "loader": {
+        "shuffle": false,
+        "workers": 12
+      }
+    },
+    "test": {
+      "dataset": {
+        "source": "test",
+        "deterministic": true,
+        "workers": 12
+      },
+      "loader": {
+        "shuffle": true,
+        "workers": 12
+      }
     }
   },
-  "gradient_clip": 1e05,
-  "adam_b1": 0.8,
-  "adam_b2": 0.99,
-  "gen_init_scale": 2e-02,
-  "validation_segment_size": 109200,
-  "validation_amount": 100,
   "sampling_rate": 16000,
   "embedding_size": 273,
-  "num_workers": 12,
-  "visualizations_amount": 5,
-  "debug": false,
   "augmentation": {
     "options": {
       "noise": [
@@ -248,13 +350,13 @@
       }
     }
   },
-  "num_gpus": 0,
-  "num_mels": 80,
-  "num_freq": 1025,
-  "n_fft": 1024,
-  "hop_size": 256,
-  "win_size": 1024,
-  "fmin": 0,
-  "fmax": 8000,
-  "fmax_for_loss": null
+  "mel": {
+    "num_mels": 80,
+    "num_freq": 1025,
+    "n_fft": 1024,
+    "hop_size": 256,
+    "win_size": 1024,
+    "fmin": 0,
+    "fmax": 8000
+  }
 }

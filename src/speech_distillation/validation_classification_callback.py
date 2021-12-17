@@ -82,9 +82,9 @@ class ValidationClassificationCallback(Callback):
         else:
             value = value.cpu().detach().squeeze()
             truth = truth.cpu().detach().squeeze()
-            outer_sequence = torch.einsum('ai,bi->abi', truth, value)
+            outer_sequence = torch.einsum('jai,jbi->jabi', truth, value)
             outer_sequence = outer_sequence.float()
-            outer = outer_sequence.mean(dim=2)
+            outer = outer_sequence.mean(dim=(0, 3))
             return outer
 
     def _recursive_one_hot(self, value, example):
@@ -95,8 +95,8 @@ class ValidationClassificationCallback(Callback):
         else:
             value = value.cpu().detach().squeeze()
             if value.dtype not in [torch.int64, torch.int32, torch.int16, torch.int8]:
-                value = value.argmax(dim=0)
+                value = value.argmax(dim=1)
             example = example.cpu().detach().squeeze()
-            value = F.one_hot(value, num_classes=example.size(0)).transpose(0, 1)
+            value = F.one_hot(value, num_classes=example.size(1)).transpose(1, 2)
             return value
 

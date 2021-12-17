@@ -1,7 +1,7 @@
 import torch
 
 
-def expand_unroll(tensor, size, dim):
+def expand(tensor, size, dim):
     size_left = size
     unrolled_tensors = []
     while size_left > tensor.size(dim):
@@ -12,16 +12,15 @@ def expand_unroll(tensor, size, dim):
     return cat_tensor
 
 
-def cycles_roll(tensor, rolls, dim):
-    size = tensor.size()
-    double_tensor = torch.cat([tensor, tensor], dim=dim)
-    last_rolled_index = 0
-    rolled_tensors = []
-    for roll, length in enumerate(rolls):
-        narrowed_tensor = torch.narrow(double_tensor, dim=dim, start=last_rolled_index, length=length)
-        rolled_tensor = torch.roll(narrowed_tensor, roll, dims=dim)
-        rolled_tensors.append(rolled_tensor)
-        last_rolled_index += length
-        last_rolled_index = last_rolled_index % size[dim]
+def mix(tensor, rolls, dim):
+    narrowed_tensors = torch.split(tensor, rolls, dim=dim)
+    rolled_tensors = [torch.roll(narrowed_tensor, roll, dims=dim) for roll, narrowed_tensor in enumerate(narrowed_tensors)]
+    cat_tensor = torch.cat(rolled_tensors, dim=dim)
+    return cat_tensor
+
+
+def unmix(tensor, rolls, dim):
+    narrowed_tensors = torch.split(tensor, rolls, dim=dim)
+    rolled_tensors = [torch.roll(narrowed_tensor, -roll, dims=dim) for roll, narrowed_tensor in enumerate(narrowed_tensors)]
     cat_tensor = torch.cat(rolled_tensors, dim=dim)
     return cat_tensor

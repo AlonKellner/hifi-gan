@@ -7,10 +7,10 @@ from src.meldataset import load_wav
 
 
 class WaveDataset(torch.utils.data.Dataset):
-    def __init__(self, training_files, segment_size, sampling_rate, split=True, n_cache_reuse=1,
+    def __init__(self, training_files, segment_length, sampling_rate, split=True, n_cache_reuse=1,
                  fine_tuning=False, deterministic=False):
         self.audio_files = training_files
-        self.segment_size = segment_size
+        self.segment_length = segment_length
         self.sampling_rate = sampling_rate
         self.split = split
         self.n_cache_reuse = n_cache_reuse
@@ -31,12 +31,12 @@ class WaveDataset(torch.utils.data.Dataset):
             audio = self.cached_wav
             self._cache_ref_count -= 1
 
-        if audio.size(1) >= self.segment_size:
-            max_audio_start = audio.size(1) - self.segment_size
+        if audio.size(1) >= self.segment_length:
+            max_audio_start = audio.size(1) - self.segment_length
             audio_start = 0 if self.deterministic else random.randint(0, max_audio_start)
-            audio = audio[:, audio_start:audio_start+self.segment_size]
+            audio = audio[:, audio_start:audio_start+self.segment_length]
         else:
-            audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.size(1)), 'constant')
+            audio = torch.nn.functional.pad(audio, (0, self.segment_length - audio.size(1)), 'constant')
 
         return audio.squeeze(0), filename
 

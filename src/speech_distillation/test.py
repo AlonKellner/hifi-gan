@@ -11,7 +11,7 @@ from src.speech_distillation.cycle_calculator import calculate_cycles
 from src.speech_distillation.embedding_classifiers.embedding_classifiers_static_configs import \
     generate_keepers_by_example
 from src.speech_distillation.label_bias_sniffer import generate_sniffers_by_example
-from src.speech_distillation.tensor_utils import cycles_roll, expand_unroll
+from src.speech_distillation.tensor_utils import mix, expand
 from textgrid_parsing import parse_textgrid
 from multilabel_wave_dataset import MultilabelWaveDataset
 from multiprocessing import Pool
@@ -22,8 +22,8 @@ import torch
 from torch.nn import functional as F
 from torchsummary import summary
 
-from static_configs import get_static_generator_configs, get_level5_model, \
-    get_leveln_model, get_res_block_config, get_static_all_in_one_discriminator
+from static_configs import get_generator_configs, get_last_level_model, \
+    get_leveln_model, get_block_config, get_discriminator_config
 from configurable_module import get_module_from_config
 
 # torch.cuda.manual_seed(1984)
@@ -48,7 +48,7 @@ from configurable_module import get_module_from_config
 #         dir='/datasets/training_audio',
 #         name='train',
 #         config_path='**/train_data_config/*.json',
-#         segment_size=h.segment_size,
+#         segment_length=h.segment_length,
 #         sampling_rate=h.sampling_rate,
 #         embedding_size=h.embedding_size,
 #         augmentation_config=config_dict['augmentation']
@@ -63,12 +63,12 @@ from configurable_module import get_module_from_config
 # for key, keeper in keepers.items():
 #     print(f'{key} keeper:')
 #     summary(keeper,
-#             input_size=(h.embedding_size, h.segment_size // h.embedding_size),
+#             input_size=(h.embedding_size, h.segment_length // h.embedding_size),
 #             batch_size=h.batch_size,
 #             device='cpu')
 #
 #
-# result = keepers['style'](torch.randn((1, h.embedding_size, h.segment_size // h.embedding_size)))
+# result = keepers['style'](torch.randn((1, h.embedding_size, h.segment_length // h.embedding_size)))
 # print(result['style']['mic-brand'][0, :, 0].sum())
 #
 # size = (3, 5)
@@ -84,7 +84,7 @@ from configurable_module import get_module_from_config
 # #
 # discriminator = get_module_from_config(get_static_all_in_one_discriminator(8))
 # summary(discriminator,
-#         input_size=(1, h.segment_size),
+#         input_size=(1, h.segment_length),
 #         batch_size=h.batch_size,
 #         device='cpu')
 #
@@ -95,7 +95,7 @@ from configurable_module import get_module_from_config
 #     )
 # )
 # summary(generator,
-#         input_size=(1, h.segment_size),
+#         input_size=(1, h.segment_length),
 #         batch_size=h.batch_size,
 #         device='cpu')
 
@@ -112,7 +112,7 @@ from configurable_module import get_module_from_config
 #     dir='/datasets/training_audio',
 #     name='train',
 #     config_path='**/train_data_config/*.json',
-#     segment_size=h.segment_size,
+#     segment_length=h.segment_length,
 #     sampling_rate=h.sampling_rate,
 #     embedding_size=h.embedding_size,
 #     augmentation_config=config_dict['augmentation']
@@ -123,7 +123,7 @@ from configurable_module import get_module_from_config
 #     dir='/datasets/training_audio',
 #     name='train',
 #     config_path='**/train_data_config/*.json',
-#     segment_size=h.validation_segment_size,
+#     segment_length=h.validation_segment_length,
 #     sampling_rate=h.sampling_rate,
 #     embedding_size=h.embedding_size,
 #     augmentation_config=config_dict['augmentation'],
@@ -136,7 +136,7 @@ from configurable_module import get_module_from_config
 #     dir='/datasets/training_audio',
 #     name='test',
 #     config_path='**/test_data_config/*.json',
-#     segment_size=h.validation_segment_size,
+#     segment_length=h.validation_segment_length,
 #     sampling_rate=h.sampling_rate,
 #     embedding_size=h.embedding_size,
 #     deterministic=True,
@@ -200,11 +200,12 @@ from configurable_module import get_module_from_config
 # print(dataset)
 
 batch_size = 6
-mixing_size = 24
-cycles = calculate_cycles(batch_size, mixing_size)
-cycles = (batch_size, *cycles)
-a = torch.randn((batch_size, 2, 5))
-r = cycles_roll(a, cycles, dim=0)
-u = expand_unroll(a, sum(cycles), dim=0)
+mixing_size = 7
+total_size = batch_size + mixing_size
+cycles = (batch_size, *calculate_cycles(batch_size, mixing_size))
+a = torch.randn((batch_size, 3))
+u = expand(a, sum(cycles), dim=0)
+r = mix(u, cycles, dim=0)
 print(r.size())
 print(u.size())
+

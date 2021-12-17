@@ -100,11 +100,11 @@ def main():
     batch_size = 5
 
     train_dataset = MultilabelWaveDataset(
-        base_dir='/datasets',
-        dir='/datasets/training_audio',
+        data_dir='/datasets',
+        cache_dir='/datasets/training_audio',
         name='train',
         config_path='**/train_data_config/*.json',
-        segment_size=h.segment_size,
+        segment_length=h.segment_length,
         sampling_rate=h.sampling_rate,
         embedding_size=h.embedding_size,
         augmentation_config=config_dict['augmentation'],
@@ -112,11 +112,11 @@ def main():
     )
 
     validation_dataset = MultilabelWaveDataset(
-        base_dir='/datasets',
-        dir='/datasets/training_audio',
+        data_dir='/datasets',
+        cache_dir='/datasets/training_audio',
         name='train',
         config_path='**/train_data_config/*.json',
-        segment_size=h.segment_size,
+        segment_length=h.segment_length,
         sampling_rate=h.sampling_rate,
         embedding_size=h.embedding_size,
         augmentation_config=config_dict['augmentation'],
@@ -126,11 +126,11 @@ def main():
     )
 
     test_dataset = MultilabelWaveDataset(
-        base_dir='/datasets',
-        dir='/datasets/training_audio',
+        data_dir='/datasets',
+        cache_dir='/datasets/training_audio',
         name='test',
         config_path='**/test_data_config/*.json',
-        segment_size=h.segment_size,
+        segment_length=h.segment_length,
         sampling_rate=h.sampling_rate,
         embedding_size=h.embedding_size,
         deterministic=True,
@@ -156,7 +156,7 @@ def main():
     for key, sniffer in sniffers.items():
         print('{} sniffer:'.format(key))
         input_size = InputSize(
-            {label: (h.segment_size // h.embedding_size,) for label, value in example_item[key].items()})
+            {label: (h.segment_length // h.embedding_size,) for label, value in example_item[key].items()})
         summary(sniffer,
                 input_size=input_size,
                 dtypes={label: RandInt(type=torch.LongTensor, high=value)

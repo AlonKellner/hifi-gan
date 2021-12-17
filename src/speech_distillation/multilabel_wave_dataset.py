@@ -38,13 +38,14 @@ augmentation_label_groups = {
 
 
 class MultilabelWaveDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dir, dir, name, config_path, segment_size, sampling_rate, embedding_size,
+    def __init__(self, data_dir, cache_dir, name, source, segment_length, sampling_rate, embedding_size,
                  augmentation_config=None, disable_wavs=False, split=True, size=None,
                  fine_tuning=False, deterministic=False):
-        self.base_dir = base_dir
-        self.dir = dir
+        self.data_dir = data_dir
+        self.cache_dir = cache_dir
         self.name = name
-        self.segment_size = segment_size
+        self.source = source
+        self.segment_length = segment_length
         self.embedding_size = embedding_size
         self.sampling_rate = sampling_rate
         self.split = split
@@ -58,19 +59,20 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
             self.aug_options = augmentation_config['options']
             self.aug_probs = augmentation_config['probs']
         print('Creating [{}] dataset:'.format(self.name))
-        name_path = Path(os.path.join(dir, name))
+        name_path = Path(os.path.join(cache_dir, name))
         if not name_path.exists():
             os.mkdir(name_path)
-        cache_path = Path(os.path.join(dir, name, 'labels_cache'))
+        cache_path = Path(os.path.join(cache_dir, name, 'labels_cache'))
         if not name_path.exists():
             os.mkdir(cache_path)
-        self.files_with_labels = self.do_with_pickle_cache(lambda: self.get_files_with_labels(dir, config_path),
-                                                           os.path.join(dir, name, 'files_with_labels.pickle'))
+        config_path = f'**/data_configs/{source}/*.json'
+        self.files_with_labels = self.do_with_pickle_cache(lambda: self.get_files_with_labels(cache_dir, config_path),
+                                                           os.path.join(cache_dir, name, 'files_with_labels.pickle'))
         if self.size is None:
             self.size = len(self.files_with_labels)
 
         self.label_options_weights = self.do_with_pickle_cache(self.get_all_label_options_weights,
-                                                               os.path.join(dir, name, 'label_options_weights.pickle'))
+                                                               os.path.join(cache_dir, name, 'label_options_weights.pickle'))
         base_prob = self.aug_probs['prob']
         sub_probs = self.aug_probs['sub_probs']
         for augmentation, augmentation_labels in self.aug_options.items():
@@ -108,8 +110,8 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
 
         if self.should_augment:
             self.aug_methods = {
-                'noise': NoiseAugmentor(self.base_dir, self.label_options).augment,
-                'rir': RirAugmentor(self.base_dir).augment,
+                'noise': NoiseAugmentor(self.data_dir, self.label_options).augment,
+                'rir': RirAugmentor(self.data_dir).augment,
                 'reverb': ReverbAugmentor(self.sampling_rate).augment,
                 'lowpass': LowpassAugmentor(self.sampling_rate).augment,
                 'highpass': HighpassAugmentor(self.sampling_rate).augment,
@@ -167,7 +169,7 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                 all_label_options[label][key] /= len(results)
         if len(rows_to_remove) > 0:
             self.files_with_labels = self.files_with_labels.drop(rows_to_remove).reset_index(drop=True)
-            pickle_path = os.path.join(self.dir, self.name, 'files_with_labels.pickle')
+            pickle_path = os.path.join(self.cache_dir, self.source, 'files_with_labels.pickle')
             with open(pickle_path, 'wb') as pickle_file:
                 pickle.dump(self.files_with_labels, pickle_file)
         all_label_options_weights = all_label_options
@@ -243,13 +245,13 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
     def create_pickle_label(self, index):
         return self.create_pickle_cache(
             lambda: self.get_fresh_label(index),
-            os.path.join(self.dir, self.name, 'labels_cache', '{}.pickle'.format(index))
+            os.path.join(self.cache_dir, self.source, 'labels_cache', '{}.pickle'.format(index))
         )
 
     def get_pickle_label(self, index):
         return self.do_with_pickle_cache(
             lambda: self.get_fresh_label(index),
-            os.path.join(self.dir, self.name, 'labels_cache', '{}.pickle'.format(index))
+            os.path.join(self.cache_dir, self.source, 'labels_cache', '{}.pickle'.format(index))
         )
 
     def get_fresh_label(self, index):
@@ -303,9 +305,9 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         return all_tensors
 
     def get_wav(self, index):
-        wav_path = get_path_by_glob(self.dir, self.files_with_labels.iloc[[index]].squeeze()['wav'])
+        wav_path = get_path_by_glob(self.cache_dir, self.files_with_labels.iloc[[index]].squeeze()['wav'])
         if self.disable_wavs:
-            return torch.zeros((self.segment_size,)), str(wav_path)
+            return torch.zeros((self.segment_length,)), str(wav_path)
         audio, sampling_rate = load_wav(wav_path)
 
         if sampling_rate != self.sampling_rate:
@@ -319,7 +321,7 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         wav, wav_path = self.get_wav(index)
         pickle_label_groups = self.get_pickle_label(index)
         length = wav.size(0)
-        embedded_segment_size = self.segment_size // self.embedding_size
+        embedded_segment_length = self.segment_length // self.embedding_size
         embedded_length = min(length // self.embedding_size,
                               next(iter(next(iter(pickle_label_groups.values())).values())).size(0))
         trimed_length = embedded_length * self.embedding_size
@@ -327,15 +329,15 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         if len(wav) > trimed_length:
             wav = wav[trimed_start:trimed_start + trimed_length]
         length = wav.size(0)
-        # print(length, self.segment_size, embedded_length, embedded_segment_size)
+        # print(length, self.segment_length, embedded_length, embedded_segment_length)
 
-        if length >= self.segment_size:
-            max_embedded_start = embedded_length - embedded_segment_size
+        if length >= self.segment_length:
+            max_embedded_start = embedded_length - embedded_segment_length
             embedded_start = self.random.randint(0, max_embedded_start)
             start = embedded_start * self.embedding_size
             # print('trim: ', start, embedded_start)
         else:
-            embedded_padding = embedded_segment_size - embedded_length
+            embedded_padding = embedded_segment_length - embedded_length
             prefix_embedded_padding = self.random.randint(0, embedded_padding)
             postfix_embedded_padding = embedded_padding - prefix_embedded_padding
             padding = embedded_padding * self.embedding_size
@@ -345,16 +347,16 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         for key, group in pickle_label_groups.items():
             for label, label_item in group.items():
                 label_item = label_item[0:embedded_length]
-                if length >= self.segment_size:
-                    cut_label_item = label_item[embedded_start:embedded_start + embedded_segment_size]
+                if length >= self.segment_length:
+                    cut_label_item = label_item[embedded_start:embedded_start + embedded_segment_length]
                 else:
                     cut_label_item = torch.nn.functional.pad(label_item,
                                                              (prefix_embedded_padding, postfix_embedded_padding),
                                                              'constant')
                 group[label] = cut_label_item
 
-        if length >= self.segment_size:
-            wav = wav[start:start + self.segment_size]
+        if length >= self.segment_length:
+            wav = wav[start:start + self.segment_length]
         else:
             wav = torch.nn.functional.pad(wav, (prefix_padding, postfix_padding), 'constant')
 

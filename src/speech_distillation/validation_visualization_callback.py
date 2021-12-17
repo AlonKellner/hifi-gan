@@ -108,17 +108,20 @@ class ValidationVisualizationCallback(Callback):
         return self.truth_to_log[key]
 
     def _visualize_wav(self, sw, pl_module, batch_idx, prefix, wav):
-        sw.add_audio(rank(prefix), wav[0], pl_module.global_step,
-                     pl_module.config.sampling_rate)
+        for index, sub_wav in enumerate(wav):
+            sw.add_audio(rank(f'{prefix}/{index}'), sub_wav.cpu().numpy(), pl_module.global_step,
+                         pl_module.config.sampling_rate)
 
     def _visualize_mel(self, sw, pl_module, batch_idx, prefix, mel):
-        sw.add_figure(rank(prefix), plot_spectrogram(mel[0].cpu().numpy()),
-                      pl_module.global_step)
+        for index, sub_mel in enumerate(mel):
+            sw.add_figure(rank(f'{prefix}/{index}'), plot_spectrogram(sub_mel.cpu().numpy()),
+                          pl_module.global_step)
 
     def _visualize_label(self, sw, pl_module, batch_idx, prefix, label):
         cat_label = self._cat_recursive(label)
-        sw.add_figure(rank(prefix), plot_categorical(cat_label.squeeze().cpu().numpy()),
-                      pl_module.global_step)
+        for index, sub_label in enumerate(cat_label):
+            sw.add_figure(rank(f'{prefix}/{index}'), plot_categorical(sub_label.squeeze().cpu().numpy()),
+                          pl_module.global_step)
 
     def _visualize_output(self, sw, pl_module, batch_idx, prefix, output):
         sw.add_histogram(rank(prefix), output, pl_module.global_step)
@@ -128,10 +131,10 @@ class ValidationVisualizationCallback(Callback):
             label_list = list(label.items())
             label_sorted = list(sorted(label_list, key=lambda pair: pair[0]))
             values = [self._cat_recursive(value) for key, value in label_sorted]
-            return torch.cat(values, dim=0)
+            return torch.cat(values, dim=1)
         else:
             label = label.squeeze()
             if label.dtype not in [torch.int64, torch.int32, torch.int16, torch.int8]:
-                label = label.argmax(dim=0)
-            label = label.squeeze().unsqueeze(0)
+                label = label.argmax(dim=1)
+            label = label.squeeze().unsqueeze(1)
             return label
