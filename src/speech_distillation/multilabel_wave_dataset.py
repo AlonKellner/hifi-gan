@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import json
 import math
 import os
@@ -19,16 +20,18 @@ from complex_data_parser import get_path_by_glob, parse_complex_data
 from src.meldataset import load_wav
 from textgrid_parsing import parse_textgrid
 
-PHI = (1 + math.sqrt(5))/2
+PHI = (1 + math.sqrt(5)) / 2
 
 MAX_WAV_VALUE = 32768.0
 
 labels_to_use = ['speaker', 'sex', 'mic-brand']
 
-timed_labels_to_use = ['phones']
+sad_based_labels = ['sex', 'speaker']
+
+timed_labels_to_use = ['phones', 'sex', 'speaker', 'sad']
 
 label_groups = {
-    'content': ['speaker', 'sex', 'phones'],
+    'content': ['speaker', 'sex', 'phones', 'sad'],
     'style': ['mic-brand']
 }
 augmentation_label_groups = {
@@ -38,10 +41,11 @@ augmentation_label_groups = {
 
 
 class MultilabelWaveDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, cache_dir, name, source, segment_length, sampling_rate, embedding_size,
+    def __init__(self, data_dir, aug_dir, cache_dir, name, source, segment_length, sampling_rate, embedding_size,
                  augmentation_config=None, disable_wavs=False, split=True, size=None,
                  fine_tuning=False, deterministic=False):
         self.data_dir = data_dir
+        self.aug_dir = aug_dir
         self.cache_dir = cache_dir
         self.name = name
         self.source = source
@@ -59,28 +63,41 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
             self.aug_options = augmentation_config['options']
             self.aug_probs = augmentation_config['probs']
         print('Creating [{}] dataset:'.format(self.name))
-        name_path = Path(os.path.join(cache_dir, name))
-        if not name_path.exists():
-            os.mkdir(name_path)
-        cache_path = Path(os.path.join(cache_dir, name, 'labels_cache'))
-        if not name_path.exists():
-            os.mkdir(cache_path)
+        source_path = Path(os.path.join(cache_dir, source))
+        if not source_path.exists():
+            source_path.mkdir(parents=True, exist_ok=True)
+        cache_path = Path(os.path.join(cache_dir, source, 'labels_cache'))
+        if not source_path.exists():
+            cache_path.mkdir(parents=True, exist_ok=True)
         config_path = f'**/data_configs/{source}/*.json'
-        self.files_with_labels = self.do_with_pickle_cache(lambda: self.get_files_with_labels(cache_dir, config_path),
-                                                           os.path.join(cache_dir, name, 'files_with_labels.pickle'))
+
+        rows_to_remove_path = os.path.join(self.cache_dir, self.source, 'rows_to_remove.pickle')
+        rows_to_remove = self.do_with_pickle_cache(lambda: [], rows_to_remove_path)
+
+        self.files_with_labels = self.do_with_pickle_cache(
+            lambda: self.get_files_with_labels(self.data_dir, config_path),
+            os.path.join(cache_dir, source, 'files_with_labels.pickle'))
+        self.remove_rows_from_files_with_labels(rows_to_remove)
         if self.size is None:
             self.size = len(self.files_with_labels)
 
         self.label_options_weights = self.do_with_pickle_cache(self.get_all_label_options_weights,
-                                                               os.path.join(cache_dir, name, 'label_options_weights.pickle'))
+                                                               os.path.join(cache_dir, source,
+                                                                            'label_options_weights.pickle'))
         base_prob = self.aug_probs['prob']
         sub_probs = self.aug_probs['sub_probs']
         for augmentation, augmentation_labels in self.aug_options.items():
             sub_prob = sub_probs[augmentation]['prob']
-            option_prob = 1.0/len(augmentation_labels)
-            self.label_options_weights[augmentation] = {'none': base_prob*(1-sub_prob), **{
-                label: base_prob*sub_prob*option_prob for label in augmentation_labels
-            }}
+            option_prob = 1.0 / len(augmentation_labels)
+            augmentation_true_options_weights = {'none': 0.0, 'disabled': (1 - base_prob) + base_prob * (1 - sub_prob),
+                                                 **{
+                                                     label: base_prob * sub_prob * option_prob for label in
+                                                     augmentation_labels
+                                                 }}
+            augmentation_false_options_weights = {key: 1 - value for key, value in
+                                                  augmentation_true_options_weights.items()}
+            self.label_options_weights[augmentation] = {'true': augmentation_true_options_weights,
+                                                        'false': augmentation_false_options_weights}
 
         all_label_groups = {key: [*label_groups[key], *augmentation_label_groups[key]] for key in label_groups.keys()}
         self.label_options_weights_groups = {
@@ -89,29 +106,33 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         }
 
         self.label_options_groups = {
-            key: {label: tuple(value.keys()) for label, value in label_group.items()}
+            key: {label: tuple(value['true'].keys()) for label, value in label_group.items()}
             for key, label_group in self.label_options_weights_groups.items()
         }
 
         self.label_options = {
-            key: tuple(label_group.keys())
-            for key, label_group in self.label_options_weights.items()
+            key: tuple(label_options['true'].keys())
+            for key, label_options in self.label_options_weights.items()
         }
 
         self.label_weights_groups = {
-            key: {label: tuple(value.values()) for label, value in label_group.items()}
-            for key, label_group in self.label_options_weights_groups.items()
+            key: {label:
+                      {'true': tuple(self.label_options_weights_groups[key][label]['true'][option] for option in options),
+                       'false': tuple(self.label_options_weights_groups[key][label]['false'][option] for option in options)}
+                  for label, options in label_group.items()}
+            for key, label_group in self.label_options_groups.items()
         }
 
         self.label_weights = {
-            key: tuple(label_group.values())
-            for key, label_group in self.label_options_weights.items()
+            label: {'true': tuple(self.label_options_weights[label]['true'][option] for option in options),
+                  'false': tuple(self.label_options_weights[label]['false'][option] for option in options)}
+            for label, options in self.label_options.items()
         }
 
         if self.should_augment:
             self.aug_methods = {
-                'noise': NoiseAugmentor(self.data_dir, self.label_options).augment,
-                'rir': RirAugmentor(self.data_dir).augment,
+                'noise': NoiseAugmentor(self.aug_dir, self.label_options).augment,
+                'rir': RirAugmentor(self.aug_dir).augment,
                 'reverb': ReverbAugmentor(self.sampling_rate).augment,
                 'lowpass': LowpassAugmentor(self.sampling_rate).augment,
                 'highpass': HighpassAugmentor(self.sampling_rate).augment,
@@ -130,9 +151,13 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         else:
             if not pickle_path.parent.exists():
                 pickle_path.parent.mkdir(parents=True, exist_ok=True)
-            result = func()
-            with open(pickle_path, 'wb') as pickle_file:
-                pickle.dump(result, pickle_file)
+            try:
+                result = func()
+                with open(pickle_path, 'wb') as pickle_file:
+                    pickle.dump(result, pickle_file)
+            except Exception as e:
+                print(f'Failed to get item to pickle! [{func}], [{pickle_path}]')
+                raise e
         return result
 
     @staticmethod
@@ -146,37 +171,90 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                 pickle.dump(result, pickle_file)
 
     def get_all_label_options_weights(self):
-        all_label_options = {}
-        for col in labels_to_use:
-            all_label_options[col] = dict(self.files_with_labels[col].value_counts(normalize=True))
+        label_options = {}
+        label_totals = {}
 
         with Pool(16) as pool:
-            for label in timed_labels_to_use:
-                all_label_options[label] = dict()
-            results = pool.map(self.get_timed_labels_value_counts_by_index, range(len(self)))
+            timed_labels_counts = pool.map(self.get_timed_labels_value_counts_by_index, range(len(self)))
+        rows_to_remove_path = os.path.join(self.cache_dir, self.source, 'rows_to_remove.pickle')
         rows_to_remove = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
+        valid_timed_labels_counts = timed_labels_counts.copy()
+        for i, timed_labels_count in enumerate(timed_labels_counts):
+            if isinstance(timed_labels_count, Exception):
                 rows_to_remove.append(i)
-            else:
-                for label in timed_labels_to_use:
-                    for key, value in result[label].items():
-                        if key not in all_label_options[label]:
-                            all_label_options[label][key] = 0
-                        all_label_options[label][key] += value
-        for label in timed_labels_to_use:
-            for key in all_label_options[label]:
-                all_label_options[label][key] /= len(results)
+                del valid_timed_labels_counts[i]
+        self.create_pickle_cache(lambda: rows_to_remove, rows_to_remove_path)
+        self.remove_rows_from_files_with_labels(rows_to_remove)
+
+        for col in labels_to_use:
+            col_value_counts = self.files_with_labels[col].value_counts()
+            label_options[col] = {
+                'true': dict(col_value_counts),
+                'false': dict(-col_value_counts + len(self.files_with_labels))
+            }
+            label_totals[col] = len(self.files_with_labels)
+
+        total_amount = len(valid_timed_labels_counts)
+        for label in timed_labels_counts[0][0]:
+            label_options[label] = {'true': {}, 'false': {}}
+            label_totals[label] = total_amount
+        for timed_labels_count in valid_timed_labels_counts:
+            true_timed_labels_count, false_timed_labels_count = timed_labels_count
+            for label in timed_labels_to_use:
+                for key in true_timed_labels_count[label]:
+                    true_value = true_timed_labels_count[label][key]
+                    false_value = false_timed_labels_count[label][key]
+                    if key not in label_options[label]['true']:
+                        label_options[label]['true'][key] = 0
+                        label_options[label]['false'][key] = total_amount
+                    label_options[label]['true'][key] += 0 if true_value == 0 else 1
+                    label_options[label]['false'][key] -= 1 if false_value == 0 else 0
+
+        for label in label_options:
+            total = label_totals[label]
+            for key in label_options[label]['true']:
+                label_options[label]['true'][key] /= total
+                label_options[label]['false'][key] /= total
+        label_options_weights = {key: {'true': self.sort_options(value['true'], none_ratio=0.0), 'false': self.sort_options(value['false'], none_ratio=1.0)} for key, value
+                                 in label_options.items()}
+        return label_options_weights
+
+    def remove_rows_from_files_with_labels(self, rows_to_remove):
         if len(rows_to_remove) > 0:
             self.files_with_labels = self.files_with_labels.drop(rows_to_remove).reset_index(drop=True)
-            pickle_path = os.path.join(self.cache_dir, self.source, 'files_with_labels.pickle')
-            with open(pickle_path, 'wb') as pickle_file:
-                pickle.dump(self.files_with_labels, pickle_file)
-        all_label_options_weights = all_label_options
-        return all_label_options_weights
+
+    def update_pickle_cache(self, func, path):
+        path = Path(path)
+        if not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        result = func()
+        with open(path, 'wb') as pickle_file:
+            pickle.dump(result, pickle_file)
+
+    def sort_options(self, options: dict, none_ratio=0.0):
+        result = OrderedDict()
+        if 'none' not in options:
+            options['none'] = none_ratio
+        ordered_keys = self.sort_options_keys(options)
+        for key in ordered_keys:
+            result[key] = options[key]
+        return result
+
+    def sort_options_keys(self, options: dict):
+        items = list(options.items())
+        items.sort(key=lambda pair: pair[1], reverse=True)
+        keys = [key for key, value in items]
+        if 'none' in keys:
+            keys.remove('none')
+        keys.insert(0, 'none')
+        return keys
 
     def get_timed_labels_value_counts_by_index(self, i):
         try:
+            if self.deterministic:
+                self.random.seed(i)
+            if self.size < len(self.files_with_labels):
+                i = (int(len(self.files_with_labels) / PHI) * i) % len(self.files_with_labels)
             labels, timed_labels = self.get_timed_labels(i)
             return self.get_labels_value_counts(timed_labels)
         except Exception as e:
@@ -184,10 +262,15 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
             return e
 
     def get_labels_value_counts(self, timed_labels):
-        result = {}
-        for label in timed_labels_to_use:
-            result[label] = dict(timed_labels[label]['text'].value_counts(normalize=True))
-        return result
+        true_labels = {}
+        false_labels = {}
+        for label, timed_label in timed_labels.items():
+            if label in timed_labels_to_use:
+                timed_label['length'] = timed_label['end'] - timed_label['start']
+                length_sum = timed_label['length'].sum()
+                true_labels[label] = dict(timed_labels[label].groupby(['text'])['length'].sum())
+                false_labels[label] = {key: length_sum - value for key, value in true_labels[label].items()}
+        return true_labels, false_labels
 
     def get_files_with_labels(self, main_dir, config_path):
         main_dir = Path(main_dir)
@@ -200,7 +283,8 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                     config = config_file.read_text()
                     config_dict = json.loads(config)
                     print('Loading [{}]...'.format(config_dict['name']))
-                    complex_data = parse_complex_data(subdir, config_dict['config'], config_dict['result'])
+                    complex_data = parse_complex_data(subdir, Path(self.data_dir), config_dict['config'],
+                                                      config_dict['result'])
                     print('[{}] loaded successfully!'.format(config_dict['name']))
                     if results is None:
                         results = complex_data
@@ -216,8 +300,29 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
     def get_timed_labels(self, index):
         all_labels = self.files_with_labels.iloc[[index]].squeeze()
         labels = self.get_labels(index)
-        timed_labels = parse_textgrid(all_labels['subdir'], all_labels['textgrid'])
-        return labels, {key: value for key, value in timed_labels.items() if key in timed_labels_to_use}
+        timed_labels = parse_textgrid(self.data_dir, all_labels['textgrid'])
+        timed_labels = self.add_extra_timed_labels(labels, timed_labels)
+        timed_labels = {key: value for key, value in timed_labels.items() if key in timed_labels_to_use}
+        return labels, timed_labels
+
+    def add_extra_timed_labels(self, labels, timed_labels):
+        timed_labels = self.add_sad_timed_labels(timed_labels)
+        timed_labels = self.add_sad_based_timed_labels(labels, timed_labels)
+        return timed_labels
+
+    def add_sad_timed_labels(self, timed_labels):
+        sad: pd.DataFrame = timed_labels['words'].copy()
+        sad['text'] = sad['text'].apply(lambda x: 'silence' if x == '' else 'speech')
+        timed_labels['sad'] = sad
+        return timed_labels
+
+    def add_sad_based_timed_labels(self, labels, timed_labels):
+        for label in sad_based_labels:
+            value = labels[label]
+            timed_label = timed_labels['sad'].copy()
+            timed_label['text'] = timed_label['text'].apply(lambda x: 'silence' if x == 'silence' else value)
+            timed_labels[label] = timed_label
+        return timed_labels
 
     def get_labels(self, index):
         labels = self.files_with_labels[labels_to_use].iloc[[index]].squeeze()
@@ -234,7 +339,8 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         if self.size < len(self.files_with_labels):
             index = (int(len(self.files_with_labels) / PHI) * index) % len(self.files_with_labels)
 
-        return self.get_augmented_item(index)
+        item = self.get_augmented_item(index)
+        return item
 
     def get_augmented_item(self, index):
         wav, wav_path, time_labels, grouped_labels = self.get_cut_item(index)
@@ -265,29 +371,34 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         return min(len(self.files_with_labels), self.size)
 
     def get_segmented_timed_labels(self, timed_labels):
+        separate_timed_labels = [
+            self.get_segmented_timed_labels_for_single(label_name, timed_label)
+            for label_name, timed_label in timed_labels.items()
+        ]
         return pd.concat(
-            [
-                self.get_segmented_timed_labels_for_single(label_name, timed_label)
-                for label_name, timed_label in timed_labels.items()
-            ],
+            separate_timed_labels,
             axis=1
         )
 
     def get_segmented_timed_labels_for_single(self, label_name, timed_label):
-        result_rows = []
         time_interval = self.embedding_size / self.sampling_rate
-        current_index = 0
-        current_time = 0
-        while current_index < len(timed_label):
-            result_rows.append({label_name: timed_label.iloc[[current_index]].squeeze()['text']})
-            current_time += time_interval
-            if current_time > timed_label.iloc[[current_index]].squeeze()['end']:
-                current_index += 1
-        return pd.DataFrame(result_rows)
+        start_time = timed_label.iloc[[0]].squeeze()['start']
+        end_time = timed_label.iloc[[-1]].squeeze()['end']
+        total_time = end_time - start_time
+        segmented_length = int(total_time // time_interval)
+
+        result_df = pd.DataFrame([{label_name: 'none'}] * segmented_length)
+
+        for index, row in timed_label.iterrows():
+            row_start_segment = int(row['start'] // time_interval)
+            row_end_segment = int(row['end'] // time_interval)
+            result_df[label_name][row_start_segment:row_end_segment] = row['text']
+        return result_df
 
     def add_segmented_labels(self, segmented_timed_labels, labels):
         for col in labels.axes[0]:
-            segmented_timed_labels[col] = labels[col]
+            if col not in segmented_timed_labels:
+                segmented_timed_labels[col] = labels[col]
         return segmented_timed_labels
 
     def convert_segmented_labels_to_tensor(self, all_segmented_labels, given_label_groups):
@@ -305,7 +416,7 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         return all_tensors
 
     def get_wav(self, index):
-        wav_path = get_path_by_glob(self.cache_dir, self.files_with_labels.iloc[[index]].squeeze()['wav'])
+        wav_path = get_path_by_glob(self.data_dir, self.files_with_labels.iloc[[index]].squeeze()['wav'])
         if self.disable_wavs:
             return torch.zeros((self.segment_length,)), str(wav_path)
         audio, sampling_rate = load_wav(wav_path)
@@ -387,7 +498,7 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
 
     def augment_item_with(self, augmented_wav, augmented_label, cut_label, methods, options, probs, aug_type,
                           should=True):
-        value = 'none'
+        value = 'disabled'
         probs = probs['sub_probs'][aug_type]
         values = options[aug_type]
         aug_method = methods[aug_type]

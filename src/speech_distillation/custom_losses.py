@@ -2,8 +2,7 @@ import torch
 from torch.nn import functional as F
 
 EPSILON = 1e-08
-cross_entropies = {}
-weight_tensors = {}
+cached_losses = {'seg_bce': {}, 'seg_bias_bce': {}}
 
 
 def recursive_loss(loss_func, x, *args):
@@ -23,60 +22,98 @@ def plus_mean_loss(*x):
     return -sum(torch.mean(_x) for _x in x)
 
 
-def cross_entropy_loss(x, target, weights: (float,)):
-    weights_hash = hash(weights)
-    if weights_hash not in cross_entropies:
-        cross_entropies[weights_hash] = torch.nn.CrossEntropyLoss(weight=(torch.Tensor(weights)**(-1)).cuda())
-    return cross_entropies[weights_hash](x, target)
+def seg_bce_loss(x, target, ratios: (float,) = None, dim=1):
+    weights_hash = hash((ratios['true'], ratios['false']))
+    bces = cached_losses['seg_bce']
+    if weights_hash not in bces:
+        bces[weights_hash] = SegBCELoss(ratios=ratios)
+    x_t = x.transpose(dim, -1)
+    one_hot_target = F.one_hot(target, x.size(dim)).float()
+
+    return bces[weights_hash](x_t, one_hot_target)
 
 
-def binary_cross_entropy_loss(x, y):
-    return -torch.mean(binary_entropy(x, y, 1) + binary_entropy(x, y, -1))
+def seg_bias_bce_loss(x, target, truth, ratios: (float,) = None, dim=1):
+    weights_hash = hash((ratios['true'], ratios['false']))
+    bces = cached_losses['seg_bias_bce']
+    if weights_hash not in bces:
+        bces[weights_hash] = SegBiasBCELoss(ratios=ratios)
+    x_t = x.transpose(dim, -1)
+    target_t = target.transpose(dim, -1)
+    one_hot_truth = F.one_hot(truth, x.size(dim)).float()
+
+    return bces[weights_hash](x_t, target_t, one_hot_truth)
 
 
-def binary_entropy(x, y, sign):
-    return (y * 0.5 * sign + 0.5) * torch.log(x * 0.5 * sign + 0.5 + EPSILON)
+def ratios_to_weights_tensors(ratios):
+    return {key: ratios_to_weights_tensor(value) for key, value in ratios.items()}
+
+def ratios_to_weights_tensor(ratios):
+    smallest_not_0 = min([r for r in ratios if r != 0], default=EPSILON)
+    ratios_t = torch.Tensor(ratios)
+    ratios_t = torch.where(ratios_t == 0, torch.ones_like(ratios_t)*smallest_not_0, ratios_t)
+    weights = ratios_t**-1
+    return weights.cuda()
 
 
-def bias_corrected_cross_entropy_loss(x, target, ground_truth, weights, dim=1):
-    weights_hash = hash((weights, tuple(x.size())))
-    if weights_hash not in weight_tensors:
-        weight_tensors[weights_hash] = (torch.Tensor(weights)**(-1)).unsqueeze(0).unsqueeze(2).broadcast_to(x.size()).cuda()
-    weights_tensor = weight_tensors[weights_hash]
-    flat = bias_corrected_cross_entropy(x, target, ground_truth, weights_tensor, dim=dim)
-    loss = flat.mean()
-    return loss
+class SegBCELoss(torch.nn.Module):
+    def __init__(self, ratios, batch_dim=0, class_dim=2):
+        super(SegBCELoss, self).__init__()
+        self.batch_dim = batch_dim
+        self.class_dim = class_dim
+        weights_tensors = ratios_to_weights_tensors(ratios)
+        self.true_weights, self.false_weights = weights_tensors['true'], weights_tensors['false']
+
+    def forward(self, x, target):
+        cross_entropy = F.binary_cross_entropy(x, target, reduction='none')
+        total_loss = normalize_segmentation_loss(cross_entropy, target, self.true_weights, self.false_weights)
+        return total_loss
 
 
-def bias_corrected_cross_entropy(x, target, ground_truth, weights, dim=1):
-    one_hot = F.one_hot(ground_truth, x.size(dim)).transpose(-1, dim)
-    high = torch.max(one_hot, target)
-    low = torch.min(one_hot, target)
-    scale = high - low + EPSILON
-    normalized = (x - low) / scale
-    sign = (-one_hot * 2 + 1)
-    transformed = sign * (normalized - 0.5) + 0.5
-    raw = -torch.log(transformed + EPSILON)*weights
-    flat = torch.max(raw, torch.zeros_like(raw))
-    flat_scaled = flat * scale * scale
-    return flat_scaled
+class SegBiasBCELoss(torch.nn.Module):
+    def __init__(self, ratios):
+        super(SegBiasBCELoss, self).__init__()
+        weights_tensors = ratios_to_weights_tensors(ratios)
+        self.true_weights, self.false_weights = weights_tensors['true'], weights_tensors['false']
+
+    def forward(self, x, target, truth):
+        high = torch.max(truth, target)
+        low = torch.min(truth, target)
+        scale = high - low + EPSILON
+        x_norm = (x - low) / scale
+        x_clamped = torch.clamp(x_norm, min=0, max=1)
+
+        biased_cross_entropy = F.binary_cross_entropy(x_clamped, 1-truth, reduction='none') * (scale * scale)
+
+        total_loss = normalize_segmentation_loss(biased_cross_entropy, target, self.true_weights, self.false_weights)
+        return total_loss
+
+
+def normalize_segmentation_loss(loss, target, true_weights, false_weights, batch_dim=0, class_dim=2):
+    sum_dims = [i for i in range(len(target.size())) if i != class_dim and i != batch_dim]
+
+    true_target = target
+    false_target = 1 - target
+
+    true_per_class_loss = (true_target * loss).sum(dim=sum_dims) / (true_target.sum(dim=sum_dims) + 1)
+    false_per_class_loss = (false_target * loss).sum(dim=sum_dims) / (false_target.sum(dim=sum_dims) + 1)
+
+    weighted_true_per_class_loss = true_per_class_loss * true_weights
+    weighted_false_per_class_loss = false_per_class_loss * false_weights
+
+    total_loss = weighted_true_per_class_loss.mean() + weighted_false_per_class_loss.mean()
+    return total_loss
 
 
 loss_types = {
     '-': lambda: minus_mean_loss,
-    'minus': lambda: minus_mean_loss,
     '+': lambda: plus_mean_loss,
-    'plus': lambda: plus_mean_loss,
-    'ce': lambda: cross_entropy_loss,
-    'cross_entropy': lambda: cross_entropy_loss,
-    'bce': lambda: binary_cross_entropy_loss,
-    'binary_cross_entropy': lambda: binary_cross_entropy_loss,
+    'seg_bce': lambda: seg_bce_loss,
+    'seg_bias_bce': lambda: seg_bias_bce_loss,
     'mse': torch.nn.MSELoss,
     'mae': torch.nn.L1Loss,
     'l2': torch.nn.MSELoss,
-    'l1': torch.nn.L1Loss,
-    'bias_ce': lambda: bias_corrected_cross_entropy_loss,
-    'bias_cross_entropy': lambda: bias_corrected_cross_entropy_loss,
+    'l1': torch.nn.L1Loss
 }
 
 

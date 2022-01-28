@@ -25,6 +25,17 @@ def plot_spectrogram(spectrogram):
     return fig
 
 
+def plot_image(image):
+    fig, ax = plt.subplots()
+    im = ax.imshow(image, aspect="auto", interpolation='none')
+    plt.colorbar(im, ax=ax)
+
+    fig.canvas.draw()
+    plt.close()
+
+    return fig
+
+
 def plot_categorical(categorical):
     cmap = colors.ListedColormap(all_colors)
     bounds = [i - 0.5 for i in range(len(all_colors))]

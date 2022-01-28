@@ -1,26 +1,30 @@
+import numpy as np
+
 LRELU_SLOPE = 0.1
 
 
 def get_discriminator_config(layers, expansion_size=1, ensemble_size=3):
-    return ('fmap',
-            (
-                ('ensemble',
-                 [
-                     get_static_single_all_in_one_discriminator_fmap(layers, expansion_size) for i in
-                     range(ensemble_size)
-                 ]
-                 ),
-                ['all_in_one']
-            )
-            )
+    return (
+        'fmap',
+        (
+            ('ensemble',
+             [
+                 get_static_single_all_in_one_discriminator_fmap(layers, expansion_size)
+                 for i in range(ensemble_size)
+             ]
+             ),
+            ['all_in_one']
+        )
+    )
 
 
-def get_discriminator_process_layer(extra_channels, channels, kernel, dilation=1, groups=1, normalization='weight'):
+def get_discriminator_process_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01, normalization='weight'):
     return [('conv', (extra_channels * channels, 1, 3, 1, 2)), ('tanh',)]
 
 
 def get_static_single_all_in_one_discriminator_fmap(layers, extra_channels=1):
-    process_layers = [get_discriminator_process_layer(*layer_params) for layer_type, layer_params in layers]
+    process_layers = [get_discriminator_process_layer(extra_channels, *layer_params)
+                      for layer_type, layer_params in layers[1:]]
     return (
         'pfmap',
         (
@@ -68,18 +72,18 @@ def get_static_single_all_in_one_discriminator(layers, extra_channels=1):
     )
 
 
-def get_discriminator_after_layer(extra_channels, channels, kernel, dilation=1, groups=1, normalization='weight'):
-    after_layer = [('conv', (extra_channels * channels, 1, kernel, 1, dilation, groups, normalization)), ('tanh',)]
+def get_discriminator_after_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01, normalization='weight'):
+    after_layer = [('conv', (extra_channels * channels, 1, kernel, 1, dilation, groups, init, normalization)), ('tanh',)]
     return after_layer
 
 
-def get_discriminator_in_layer(extra_channels, layer_type, next_channels, channels, kernel, dilation=1, groups=1):
+def get_discriminator_in_layer(extra_channels, layer_type, next_channels, channels, kernel, dilation=1, init=0.01, groups=1):
     if layer_type[0] == 'roll':
-        raw_blocks = get_roll_raw_block(next_channels)
+        raw_blocks = [get_roll_raw_block(next_channels)]
     else:
         raw_blocks = get_all_raw_blocks(extra_channels, next_channels)
     return get_all_in_one_block_config(
-        extra_channels * channels, kernel, dilation, channels, next_channels, groups,
+        extra_channels * channels, kernel, dilation, channels, next_channels, groups, init,
         raw_blocks=raw_blocks, tags=['all_in_one'])
 
 
@@ -94,15 +98,15 @@ def get_discriminator_in_layers(extra_channels, layers):
     return in_layers
 
 
-def get_discriminator_before_layer(extra_channels, channels, kernel, dilation=1, groups=1, normalization='spectral'):
+def get_discriminator_before_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01, normalization='spectral'):
     before_layer = [
-        ('conv', (1, extra_channels * channels, kernel, 1, dilation, groups, normalization)),
+        ('conv', (1, extra_channels * channels, kernel, 1, dilation, groups, init, normalization)),
         ('lrelu', LRELU_SLOPE, ['all_in_one']),
     ]
     return before_layer
 
 
-def get_all_in_one_block_config(pre_channels, kernel_size, dilation, pre_scale, post_scale, groups=1,
+def get_all_in_one_block_config(pre_channels, kernel_size, dilation, pre_scale, post_scale, groups=1, init=0.01,
                                 raw_blocks=None,
                                 tags=[]):
     post_channels = (pre_channels // pre_scale) * post_scale
@@ -112,15 +116,15 @@ def get_all_in_one_block_config(pre_channels, kernel_size, dilation, pre_scale, 
     return ('all_in_one_block',
             (
                 [
-                    ('conv_rech', (pre_channels, post_channels, kernel_size, None, 1, groups)),
+                    ('conv_rech', (pre_channels, post_channels, kernel_size, None, 1, groups, init)),
                     ('lrelu', LRELU_SLOPE),
                 ],
                 raw_blocks,
                 [
-                    ('conv_shuffle', (mid_channels, post_channels, kernel_size, 1, 1, mid_groups)),
+                    ('conv_shuffle', (mid_channels, post_channels, kernel_size, 1, 1, mid_groups, init)),
                     ('lrelu', LRELU_SLOPE),
                     ('res',
-                     ('conv_shuffle', (post_channels, post_channels, kernel_size, 1, dilation, groups)),
+                     ('conv_shuffle', (post_channels, post_channels, kernel_size, 1, dilation, groups, init)),
                      tags),
                     ('lrelu', LRELU_SLOPE),
                 ]
@@ -143,15 +147,15 @@ def get_generator_configs(layers: list, expansion_size=16, embedding_size=273):
 
     first_layer_type, first_layer_params = reverse_layers[-1]
     encoder, decoder = get_first_level_model(current_encoder, current_decoder, expansion_size,
-                                             first_layer_type, *first_layer_params)
+                                             first_layer_type, *first_layer_params, layers_params=layers[1:])
     return {'encoder': encoder, 'decoder': decoder}
 
 
 def get_leveln_model(inner_encode, inner_decode, expansion, current_level_type, channels=1, kernel=63, stride=1,
-                     dilation=1, groups=1):
+                     dilation=1, groups=1, init=0.01):
     auto_type, upsample_type = current_level_type
-    encode_block = get_block_config(auto_type, expansion, channels, kernel, stride, dilation, groups)
-    decode_block = get_block_config(auto_type, expansion, channels, kernel, stride, dilation, groups)
+    encode_block = get_block_config(auto_type, expansion, channels, kernel, stride, dilation, groups, init)
+    decode_block = get_block_config(auto_type, expansion, channels, kernel, stride, dilation, groups, init)
     if upsample_type == 'sub_res':
         decode_block = [
             decode_block,
@@ -161,25 +165,32 @@ def get_leveln_model(inner_encode, inner_decode, expansion, current_level_type, 
         ]
 
     encoder = [
-        encode_block,
         ('roll', (stride,)),
+        encode_block,
         inner_encode
     ]
     decoder = [
         inner_decode,
-        ('unroll', (stride,)),
-        decode_block
+        decode_block,
+        ('unroll', stride)
     ]
     return encoder, decoder
 
 
 def get_first_level_model(encoder2, decoder2, expansion_size, layer_type, channels=1, kernel=63, stride=1, dilation=1,
-                          groups=1):
-    en_layer = [('conv', (1, expansion_size, kernel, 1, dilation, groups, 'spectral')), ('lrelu', LRELU_SLOPE)]
-    de_layer = [('conv', (expansion_size, 1, kernel, 1, dilation, groups)), ('tanh',)]
+                          groups=1, init=0.01, layers_params=None):
+    en_layer = [
+        ('conv', (1, expansion_size, kernel, 1, dilation, groups, init, 'spectral')),
+        ('lrelu', LRELU_SLOPE),
+        get_base_block_config(expansion_size, 1, kernel, 1, dilation, groups, init)
+    ]
+    de_layer = [
+        get_base_block_config(expansion_size, 1, kernel, 1, dilation, groups, init),
+        ('conv', (expansion_size, 1, kernel, 1, dilation, groups, init))
+    ]
 
-    (layer_type,) = layer_type
-    if layer_type == 'res':
+    base_type, extra_type = layer_type
+    if base_type == 'res':
         en_layer = ('sum', [
             en_layer,
             ('repl', expansion_size)
@@ -188,6 +199,16 @@ def get_first_level_model(encoder2, decoder2, expansion_size, layer_type, channe
             de_layer,
             ('avg_ch',)
         ])
+    if extra_type == 'multi_sub_res':
+        pooling_multipliers = [layer_params[2] for layer_types, layer_params in layers_params]
+        pooling_dilations = [int(np.prod(pooling_multipliers[:i])) for i in range(1, len(pooling_multipliers)+1)]
+        sub_res_layers = [('sub_res', ('poold', (127, 1, pooling_dilation))) for pooling_dilation in pooling_dilations]
+        sub_res_layers.reverse()
+        de_layer = [
+            de_layer,
+            *sub_res_layers
+        ]
+    de_layer = [de_layer, ('tanh',)]
 
     encoder = [
         en_layer,
@@ -230,75 +251,98 @@ def get_decaying_block(initial_skip_ratio, skip_tag, anti_tag, noise_channels, i
         )
 
 
-def get_block_config(block_type, expansion, channel_size, kernel_size, stride, dilation, groups=1):
-    expanded_size = channel_size * expansion
-    block = [
-        ('conv', (expanded_size, expanded_size, kernel_size, 1, dilation, groups)),
-        ('lrelu', LRELU_SLOPE),
-        ('conv_shuffle', (expanded_size, expanded_size, kernel_size, 1, dilation, groups)),
-        ('lrelu', LRELU_SLOPE)
-    ]
+def get_block_config(block_type, expansion, channel_size, kernel_size, stride, dilation, groups=1, init=0.01):
+    block = get_base_block_config(expansion, channel_size, kernel_size, stride, dilation, groups, init)
     if block_type == 'res':
         block = ('res', block)
     return block
 
 
-def get_fusion_res_block_config(channel_size, kernel_size, groups=1):
+def get_base_block_config(expansion, channel_size, kernel_size, stride, dilation, groups=1, init=0.01):
+    expanded_size = channel_size * expansion * stride
+    block = [
+        ('conv', (expanded_size, expanded_size, kernel_size, 1, dilation, groups, init)),
+        ('lrelu', LRELU_SLOPE),
+        ('conv_shuffle', (expanded_size, expanded_size, kernel_size, 1, dilation, groups, init)),
+        ('lrelu', LRELU_SLOPE)
+    ]
+    return block
+
+
+def get_fusion_res_block_config(channel_size, kernel_size, groups=1, init=0.01):
     common_res_blocks = \
         [
             [
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 1, groups, init)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups, init)),
                 ]),
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 2, groups)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 2, groups, init)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
-                ]),
-            ],
-            [
-                ('res', [
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 2, groups)),
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
-                ]),
-                ('res', [
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 6, groups)),
-                    ('lrelu', LRELU_SLOPE),
-                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups, init)),
                 ]),
             ],
             [
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 3, groups)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 2, groups, init)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups, init)),
                 ]),
                 ('res', [
                     ('lrelu', LRELU_SLOPE),
-                    ('conv', (channel_size, channel_size, kernel_size, 1, 12, groups)),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 6, groups, init)),
                     ('lrelu', LRELU_SLOPE),
-                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups)),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups, init)),
+                ]),
+            ],
+            [
+                ('res', [
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 3, groups, init)),
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups, init)),
+                ]),
+                ('res', [
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv', (channel_size, channel_size, kernel_size, 1, 12, groups, init)),
+                    ('lrelu', LRELU_SLOPE),
+                    ('conv_shuffle', (channel_size, channel_size, kernel_size, 1, 1, groups, init)),
                 ]),
             ],
         ]
     return 'fusion', common_res_blocks
 
 
-def get_classifier_backbone(input_channels, output_channels, hiddens, groups=[1]):
-    layers = [input_channels, *hiddens, output_channels]
-    return [[('conv', (layers[i], layers[i + 1], 3, 1, 1, groups[i % len(groups)])), ('lrelu', LRELU_SLOPE)] for i in
-            range(len(layers) - 1)]
+def get_classifier_backbone(input_channels, output_channels, layers):
+    input_layer_type, input_layer_params = layers[0]
+    input_layer = get_conv_layer(input_channels, *input_layer_params)
+    hidden_layers = []
+    for current_index in range(1, len(layers) - 1):
+        previous_index = current_index - 1
+        previous_channels = layers[previous_index][1][0]
+        current_layer_type, current_layer_params = layers[current_index]
+        hidden_layer = get_conv_layer(previous_channels, *current_layer_params)
+        hidden_layers.append(hidden_layer)
+    output_layer_type, output_layer_params = layers[-1]
+    previous_layer_channels = layers[-2][1][0]
+    output_layer = get_conv_layer(previous_layer_channels, output_channels, *output_layer_params[1:])
+
+    return [input_layer, *hidden_layers, output_layer]
 
 
-def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[1092, 546, 364], groups=[1],
+def get_conv_layer(in_channels, out_channels, kernel, stride=1, dilation=1, group=1, init=0.01, normalization='weight'):
+    return [
+        ('conv', (in_channels, out_channels, kernel, stride, dilation, group, init, normalization)),
+        ('lrelu', LRELU_SLOPE)
+    ]
+
+
+def generate_sniffer_config_by_example(key, label_group, example_item, layers,
                                        one_hot=False):
     input_channels = sum(len(value) for value in label_group.values())
     other_label_groups = {ex_key: {key2: len(value2) for key2, value2 in value.items()} for ex_key, value in
@@ -308,24 +352,24 @@ def generate_sniffer_config_by_example(key, label_group, example_item, hiddens=[
         for ex_key, other_label_group in other_label_groups.items()
     }
     output_channels = sum(other_groups_channels.values())
-    layers = [
+    sniffer_layers = [
         ('merge_dict',),
-        get_classifier_backbone(input_channels, output_channels, hiddens, groups=groups),
+        get_classifier_backbone(input_channels, output_channels, layers=layers),
         ('split', other_groups_channels),
         ('recursive', {group: ('split', sizes) for group, sizes in other_label_groups.items()}),
         ('recursive', {group: {key: ('softmax',) for key in sizes} for group, sizes in other_label_groups.items()}),
     ]
     if one_hot:
         one_hot_layer = ('recursive', {label: ('one_hot', (value, 1)) for label, value in label_group.items()})
-        layers = [one_hot_layer, *layers]
-    return layers
+        sniffer_layers = [one_hot_layer, *sniffer_layers]
+    return sniffer_layers
 
 
-def generate_sniffers_configs_by_example(example_item, hiddens=[1092, 546, 364], groups=[1], ensemble_size=3,
+def generate_sniffers_configs_by_example(example_item, layers, ensemble_size=3,
                                          one_hot=False):
     sniffers = {
         key: ('ensemble', [
-            generate_sniffer_config_by_example(key, label_group, example_item, hiddens=hiddens, groups=[1],
+            generate_sniffer_config_by_example(key, label_group, example_item, layers=layers,
                                                one_hot=one_hot)
             for i in range(ensemble_size)
         ])

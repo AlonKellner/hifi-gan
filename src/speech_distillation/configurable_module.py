@@ -71,7 +71,7 @@ def get_no_params_module_from_config(module_name):
 def get_with_params_module_from_config(module_name, module_parameters):
     module = None
     if module_name == 'conv':
-        chin, chout, kernel, stride, dilation, groups, norm = process_conv_params(*module_parameters)
+        chin, chout, kernel, stride, dilation, groups, init, norm = process_conv_params(*module_parameters)
         module = norm(
             Conv1d(chin, chout,
                    kernel_size=kernel,
@@ -81,9 +81,9 @@ def get_with_params_module_from_config(module_name, module_parameters):
                    padding=get_padding(kernel, stride=stride, dilation=dilation)
                    )
         )
-        module.apply(init_weights)
+        module.apply(lambda m: init_weights(m, std=init))
     elif module_name == 'conv_shuffle':
-        chin, chout, kernel, stride, dilation, groups, norm = process_conv_shuffle_params(*module_parameters)
+        chin, chout, kernel, stride, dilation, groups, init, norm = process_conv_shuffle_params(*module_parameters)
         if groups == 1:
             module = get_module_from_config(
                 ('conv', (chin, chout, kernel, stride, dilation, groups))
@@ -97,9 +97,9 @@ def get_with_params_module_from_config(module_name, module_parameters):
                     ('unshuffle', groups)
                 ]
             )
-        module.apply(init_weights)
+        module.apply(lambda m: init_weights(m, std=init))
     elif module_name == 'conv_rech':
-        chin, chout, kernel, stride, dilation, groups, norm = process_conv_params(*module_parameters)
+        chin, chout, kernel, stride, dilation, groups, init, norm = process_conv_params(*module_parameters)
         module = norm(
             Conv1dRechanneled(chin, chout,
                               kernel_size=kernel,
@@ -109,9 +109,9 @@ def get_with_params_module_from_config(module_name, module_parameters):
                               padding=get_padding(kernel, stride=stride, dilation=dilation)
                               )
         )
-        module.apply(init_weights)
+        module.apply(lambda m: init_weights(m, std=init))
     elif module_name == 'conv2':
-        chin, chout, kernel, stride, dilation, groups, norm = process_conv_params(*module_parameters)
+        chin, chout, kernel, stride, dilation, groups, init, norm = process_conv_params(*module_parameters)
         module = norm(
             Conv2d(chin, chout,
                    kernel_size=kernel,
@@ -121,9 +121,9 @@ def get_with_params_module_from_config(module_name, module_parameters):
                    padding=get_padding(kernel, stride=stride, dilation=dilation)
                    )
         )
-        module.apply(init_weights)
+        module.apply(lambda m: init_weights(m, std=init))
     elif module_name == 'trans':
-        chin, chout, kernel, stride, dilation, groups, norm = process_conv_params(*module_parameters)
+        chin, chout, kernel, stride, dilation, groups, init, norm = process_conv_params(*module_parameters)
         padding, output_padding = get_padding_trans(kernel, stride=stride, dilation=dilation)
         module = norm(
             ConvTranspose1d(chin, chout,
@@ -135,9 +135,9 @@ def get_with_params_module_from_config(module_name, module_parameters):
                             output_padding=output_padding
                             )
         )
-        module.apply(init_weights)
+        module.apply(lambda m: init_weights(m, std=init))
     elif module_name == 'trans_shuffle':
-        chin, chout, kernel, stride, dilation, groups, norm = process_conv_shuffle_params(*module_parameters)
+        chin, chout, kernel, stride, dilation, groups, init, norm = process_conv_shuffle_params(*module_parameters)
         if groups == 1:
             module = get_module_from_config(
                 ('trans', (chin, chout, kernel, stride, dilation, groups))
@@ -151,9 +151,9 @@ def get_with_params_module_from_config(module_name, module_parameters):
                     ('unshuffle', groups)
                 ]
             )
-        module.apply(init_weights)
+        module.apply(lambda m: init_weights(m, std=init))
     elif module_name == 'trans2':
-        chin, chout, kernel, stride, dilation, groups, norm = process_conv_params(*module_parameters)
+        chin, chout, kernel, stride, dilation, groups, init, norm = process_conv_params(*module_parameters)
         padding, output_padding = get_padding_trans(kernel, stride=stride, dilation=(1, 1))
         module = norm(
             ConvTranspose2d(chin, chout,
@@ -165,7 +165,7 @@ def get_with_params_module_from_config(module_name, module_parameters):
                             output_padding=output_padding
                             )
         )
-        module.apply(init_weights)
+        module.apply(lambda m: init_weights(m, std=init))
     elif module_name == 'up':
         stride, mode = module_parameters
         module = Upsample(scale_factor=stride, mode=mode)
@@ -309,18 +309,18 @@ def get_with_params_module_from_config(module_name, module_parameters):
     return module
 
 
-def process_conv_params(chin, chout, kernel, stride=1, dilation=1, groups=1, norm_type=None):
+def process_conv_params(chin, chout, kernel, stride=1, dilation=1, groups=1, init=0.01, norm_type=None):
     norm = weight_norm
     if norm_type == 'spectral':
         norm = spectral_norm
     elif norm_type == 'none':
         def norm(x):
             return x
-    return chin, chout, kernel, stride, dilation, groups, norm
+    return chin, chout, kernel, stride, dilation, groups, init, norm
 
 
-def process_conv_shuffle_params(chin, chout, kernel, stride=1, dilation=1, groups=1, norm_type=None):
-    return chin, chout, kernel, stride, dilation, groups, norm_type
+def process_conv_shuffle_params(chin, chout, kernel, stride=1, dilation=1, groups=1, init=0.01, norm_type=None):
+    return chin, chout, kernel, stride, dilation, groups, init, norm_type
 
 
 def process_roll_params(period, padding_mode='constant', padding_value=0):

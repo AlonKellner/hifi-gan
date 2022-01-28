@@ -6,25 +6,25 @@ import json
 from pathlib import Path
 
 
-def parse_complex_data(subdir, data_config, result_group):
+def parse_complex_data(subdir, data_dir, data_config, result_group):
     all_labels = {}
     for data_group in data_config:
         group_name = data_group['group-name']
-        group_labels = parse_group_sources_labels(subdir, data_group)
+        group_labels = parse_group_sources_labels(subdir, data_dir, data_group)
         all_labels[group_name] = group_labels
         if 'enrichments' in data_group:
             enrichments = data_group['enrichments']
             for enrichment in enrichments:
-                parse_enrichment_labels(subdir, group_name, enrichment, all_labels)
+                parse_enrichment_labels(subdir, data_dir, group_name, enrichment, all_labels)
     return all_labels[result_group]
 
 
-def parse_enrichment_labels(subdir, group_name, enrichment, all_labels):
+def parse_enrichment_labels(subdir, data_dir, group_name, enrichment, all_labels):
     enrichment_type = enrichment['type']
     if enrichment_type == 'regex':
         parse_regex_labels(group_name, enrichment, all_labels)
     elif enrichment_type == 'files':
-        parse_files_labels(subdir, group_name, enrichment, all_labels)
+        parse_files_labels(subdir, data_dir, group_name, enrichment, all_labels)
     elif enrichment_type == 'join':
         parse_join_labels(group_name, enrichment, all_labels)
     elif enrichment_type == 'select':
@@ -63,12 +63,12 @@ def get_regex_of_value(row, label, pattern):
     return groups
 
 
-def parse_files_labels(subdir, group_name, enrichment, all_labels):
+def parse_files_labels(subdir, data_dir, group_name, enrichment, all_labels):
     labels = enrichment['labels']
     group_labels = all_labels[group_name]
     sample_row = group_labels.iloc[[0]].squeeze()
     for label, pattern in labels.items():
-        get_path_by_glob(subdir, resolve_label_references(pattern, sample_row.to_dict()))
+        get_path_by_glob(data_dir, resolve_label_references(pattern, sample_row.to_dict()))
         group_labels[label] = group_labels.apply(
             axis=1,
             func=lambda row: resolve_label_references(pattern, row.to_dict())
@@ -118,11 +118,11 @@ def parse_join_labels(group_name, enrichment, all_labels):
     all_labels[group_name] = group_labels
 
 
-def parse_group_sources_labels(subdir, data_group):
+def parse_group_sources_labels(subdir, data_dir, data_group):
     group_labels = None
     sources = data_group['sources']
     for source in sources:
-        source_rows = parse_rows_from_source(subdir, source)
+        source_rows = parse_rows_from_source(subdir, data_dir, source)
         if group_labels is None:
             group_labels = source_rows
         else:
@@ -135,18 +135,21 @@ def parse_group_sources_labels(subdir, data_group):
     return group_labels
 
 
-def parse_rows_from_source(subdir, source):
+def parse_rows_from_source(subdir, data_dir, source):
     source_type = source['type']
     if source_type == 'csv':
-        return parse_rows_from_csv(subdir, source)
+        results = parse_rows_from_csv(subdir, data_dir, source)
     elif source_type == 'glob':
-        return parse_rows_from_glob(subdir, source)
+        results = parse_rows_from_glob(subdir, data_dir, source)
     else:
         raise Exception('Unknown source type - {}'.format(source_type))
+    if 'size' in source:
+        results = results[:source['size']]
+    return results
 
 
-def parse_rows_from_csv(subdir, source):
-    path = get_path_by_glob(subdir, source['path'])
+def parse_rows_from_csv(subdir, data_dir, source):
+    path = get_path_by_glob(data_dir, source['path'])
     csv = pd.read_csv(
         path,
         delimiter=source['delimiter'],
@@ -158,9 +161,9 @@ def parse_rows_from_csv(subdir, source):
     return csv
 
 
-def parse_rows_from_glob(subdir, source):
+def parse_rows_from_glob(subdir, data_dir, source):
     source_glob = source['glob']
-    glob_files = list(subdir.glob(source_glob))
+    glob_files = list(data_dir.glob(source_glob))
 
     label = source['label']
     return pd.DataFrame(glob_files, columns=[label])

@@ -81,8 +81,8 @@ class LabelBiasSniffer(pl.LightningModule):
         return loss
 
 
-def generate_sniffers_by_example(example_item, cache_hook=lambda k, x: x(), hiddens=[1092, 546, 364], groups=[1], one_hot=False):
-    sniffers_configs = generate_sniffers_configs_by_example(example_item, hiddens=hiddens, groups=[1], one_hot=one_hot)
+def generate_sniffers_by_example(example_item, cache_hook=lambda k, x: x(), layers=[], one_hot=False):
+    sniffers_configs = generate_sniffers_configs_by_example(example_item, layers=layers, one_hot=one_hot)
     return torch.nn.ModuleDict(
         {key: get_module_from_config(cache_hook(key, lambda: sniffer_config)) for key, sniffer_config in
          sniffers_configs.items()})

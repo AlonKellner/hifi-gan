@@ -1,6 +1,9 @@
 import os
+import random
+import shutil
 import warnings
 from pathlib import Path
+import numpy as np
 
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
@@ -15,16 +18,15 @@ from src.speech_distillation.global_sync_lr_scheduler import GlobalSyncExponenti
 from src.speech_distillation.label_bias_sniffer import generate_sniffers_by_example
 from src.speech_distillation.output_sum_callback import OutputSumCallback
 from src.speech_distillation.recursive_utils import get_recursive
+from src.speech_distillation.tensor_utils import mix, expand, unmix
 from src.speech_distillation.validation_classification_callback import ValidationClassificationCallback
 from src.speech_distillation.yaml_utils import do_and_cache, do_and_cache_dict
-from src.speech_distillation.tensor_utils import mix, expand, unmix
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import argparse
 import json
 import torch
-from torch.utils.data import DistributedSampler, DataLoader
-from src.env import AttrDict
+from torch.utils.data import DataLoader
 from multilabel_wave_dataset import MultilabelWaveDataset
 from src.meldataset import mel_spectrogram
 from src.speech_distillation.continuous_checkpoint_callback import ContinuousCheckpointCallback
@@ -55,12 +57,13 @@ class GanAutoencoder(pl.LightningModule):
                  hunters, hunters_copies,
                  sniffers,
                  label_weights,
-                 config):
+                 embedding_size, config):
         super().__init__()
         self.automatic_optimization = False
-        self.accumulated_grad_batches = config.accumulated_grad_batches
 
-        self.learning_rates = config['learning']['learning_rates']
+        self.random = random.Random()
+
+        self.optimizers_config = config['learning']['optimizers']
         self.loss_factors = config['learning']['loss_factors']
         self.loss_backward = config['learning']['loss_backward']
         self.losses = get_losses_by_types(config['learning']['loss_funcs'])
@@ -74,14 +77,15 @@ class GanAutoencoder(pl.LightningModule):
         self.hunters = hunters
         self.hunters_copies = hunters_copies
         self.sniffers = sniffers
-        self.learning_models = {
+        self.learning_models = torch.nn.ModuleDict({
             'generator': self.generator,
             'discriminator': self.discriminator,
             'keepers': self.keepers,
             'hunters': self.hunters,
             'sniffers': self.sniffers
-        }
-        self.flat_learning_models = self._create_flat_models(self.learning_models)
+        })
+        self.flat_learning_models, self.flat_optimizers_config = self._create_flat_models_module(self.learning_models, self.optimizers_config)
+        self.register_dict(self.flat_learning_models)
         self.label_weights = label_weights
 
         self.loop_configs = config['loops']
@@ -89,10 +93,17 @@ class GanAutoencoder(pl.LightningModule):
             batch_size = loop_type_config['batch_size']
             loop_type_config['rolls'] = (batch_size, *calculate_cycles(batch_size, loop_type_config['mix_size']))
 
-        self.config = config
+        self.learning_config = config['learning']
+        self.mel_config = config['mel']
+        self.sampling_rate = config['sampling_rate']
+        self.embedding_size = embedding_size
 
         self._update_discriminator_copy()
         self._update_hunters_copies()
+
+    def register_dict(self, flat_models):
+        for key, model in flat_models.items():
+            self.__setattr__(key, model)
 
     def _update_discriminator_copy(self):
         self.discriminator_copy.load_state_dict(self.discriminator.state_dict())
@@ -101,18 +112,31 @@ class GanAutoencoder(pl.LightningModule):
         for key, hunter in self.hunters.items():
             self.hunters_copies[key].load_state_dict(hunter.state_dict())
 
-    def _create_flat_models(self, models):
+    def _create_flat_models_module(self, models, optimizers_config):
+        flat_models, flat_optimizers_config = self._create_flat_models(models, optimizers_config)
+        return torch.nn.ModuleDict(flat_models), flat_optimizers_config
+
+    def _create_flat_models(self, models, optimizers_config: {str: object}):
         if isinstance(models, (dict, torch.nn.ModuleDict)):
-            models_2d_array = {key: self._create_flat_models(model) for key, model in
-                               models.items()}
+            key_groups = {key: key.split(',') for key in optimizers_config.keys()}
+            grouped_models = {key: models[sub_keys[0]] if len(sub_keys) == 1 else torch.nn.ModuleList([models[sub_key] for sub_key in sub_keys]) for key, sub_keys in key_groups.items()}
+            a_2d_array = {key: self._create_flat_models(pair, optimizers_config[key]) for key, pair in
+                               grouped_models.items()}
+            models_2d_array = {key: pair[0] for key, pair in a_2d_array.items()}
+            configs_2d_array = {key: pair[1] for key, pair in a_2d_array.items()}
             flat_models = {
                 (f'{key_2d}' if key_1d is None else f'{key_2d}/{key_1d}'): model
                 for key_2d, models_1d_array in models_2d_array.items()
                 for key_1d, model in models_1d_array.items()
             }
-            return flat_models
+            flat_config = {
+                (f'{key_2d}' if key_1d is None else f'{key_2d}/{key_1d}'): optimizer_config
+                for key_2d, optimizers_1d_array in configs_2d_array.items()
+                for key_1d, optimizer_config in optimizers_1d_array.items()
+            }
+            return flat_models, flat_config
         else:
-            return {None: models}
+            return {None: models}, {None: optimizers_config}
 
     def get_learning_models(self):
         return self.flat_learning_models
@@ -159,18 +183,19 @@ class GanAutoencoder(pl.LightningModule):
         return results
 
     def configure_optimizers(self):
-        optimizers = self._models_to_optimizers(self.learning_models, self.learning_rates)
+        optimizers = self._models_to_optimizers(self.get_learning_models(), self.flat_optimizers_config)
 
         schedulers = [
-            GlobalSyncExponentialLR(optimizer, lr_decay=self.config.lr_decay, global_step=self.global_step) for
+            GlobalSyncExponentialLR(optimizer, lr_decay=self.learning_config['lr_decay'], global_step=self.global_step) for
             optimizer in optimizers
         ]
         return optimizers, schedulers
 
-    def _models_to_optimizers(self, models, learning_rates):
+    def _models_to_optimizers(self, models, optimizers_config):
         if isinstance(models, (dict, torch.nn.ModuleDict)):
-            optimizers_2d_array = [self._models_to_optimizers(model, learning_rates[key]) for key, model in
-                                   models.items()]
+            sorted_keys = list(models.keys())
+            sorted_keys.sort()
+            optimizers_2d_array = [self._models_to_optimizers(models[key], optimizers_config[key]) for key in sorted_keys]
             flat_optimizers = [
                 optimizer
                 for optimizers_1d_array in optimizers_2d_array
@@ -180,8 +205,8 @@ class GanAutoencoder(pl.LightningModule):
         else:
             return [torch.optim.AdamW(
                 models.parameters(),
-                learning_rates,
-                betas=(self.config.adam_b1, self.config.adam_b2),
+                lr=optimizers_config,
+                betas=(self.learning_config['adam_b1'], self.learning_config['adam_b2']),
                 amsgrad=True
             )]
 
@@ -248,7 +273,29 @@ class GanAutoencoder(pl.LightningModule):
         }
         return output
 
+    def cut_and_roll(self, tensor, size, cut_dim, roll_dim):
+        length = tensor.size(cut_dim)
+        narrowed_tensors = torch.split(tensor, [size, length-size], dim=cut_dim)
+        rolled_tensors = [torch.roll(narrowed_tensor, roll, dims=roll_dim) for roll, narrowed_tensor in
+                          enumerate(narrowed_tensors)]
+        cat_tensor = torch.cat(rolled_tensors, dim=cut_dim)
+        return cat_tensor
+
+    def cut_and_roll_batch(self, batch, roll_dim=0, cut_dim=1):
+        wav, wav_path, time_labels, labels = batch
+
+        batch_size, length = wav.size()
+        embedded_length = length // self.embedding_size
+        embedded_cut = self.random.randint(0, embedded_length)
+        wav_cut = embedded_cut * self.embedding_size
+
+        wav = self.cut_and_roll(wav, wav_cut, cut_dim, roll_dim)
+        time_labels = get_recursive(self.cut_and_roll, time_labels, args=[embedded_cut, cut_dim, roll_dim])
+
+        return wav, wav_path, time_labels, labels
+
     def training_step(self, train_batch, batch_idx):
+        # train_batch = self.cut_and_roll_batch(train_batch)
         losses_dict, _, _ = self.get_losses(train_batch, batch_idx, 'train', backprop=True, get_data=False)
         self._update_discriminator_copy()
         self._update_hunters_copies()
@@ -463,13 +510,13 @@ class GanAutoencoder(pl.LightningModule):
     def get_mel_spectrogram(self, wav):
         return mel_spectrogram(
             wav.squeeze(1),
-            self.config.n_fft,
-            self.config.num_mels,
-            self.config.sampling_rate,
-            self.config.hop_size,
-            self.config.win_size,
-            self.config.fmin,
-            self.config.fmax_for_loss)
+            self.mel_config['n_fft'],
+            self.mel_config['num_mels'],
+            self.sampling_rate,
+            self.mel_config['hop_size'],
+            self.mel_config['win_size'],
+            self.mel_config['fmin'],
+            self.mel_config['fmax'])
 
     def get_adversarial_hunting_data(self, embeddings, detached_embeddings, time_labels, weights, hunters, keepers,
                                      sniffers):
@@ -628,6 +675,7 @@ def create_dataset(name, loop_config, dataset_config, augmentation_config, sampl
     base_dir = '/datasets'
     dataset = MultilabelWaveDataset(
         data_dir=f'{base_dir}/data',
+        aug_dir=f'{base_dir}/aug',
         cache_dir=f'{base_dir}/cache',
         name=name,
         segment_length=loop_config['segment_length'],
@@ -638,7 +686,6 @@ def create_dataset(name, loop_config, dataset_config, augmentation_config, sampl
     )
     loader = DataLoader(
         dataset,
-        num_workers=dataset_config['num_workers'],
         sampler=None,
         batch_size=loop_config['batch_size'],
         pin_memory=True,
@@ -663,18 +710,20 @@ def main():
     print('Initializing Training Process...')
 
     tb_logger, config = create_config()
+    parsed_layers = parse_layers(config['models']['generator']['layers'])
+    embedding_size = int(np.prod([layer_params[2] for layer_types, layer_params in parsed_layers]))
 
     set_debug_apis(config['debug'])
 
     datasets = create_datasets(
-        config['loops'], config['datasets'], config['augmentation'], config['sampling_rate'], config['embedding_size']
+        config['loops'], config['data'], config['augmentation'], config['sampling_rate'], embedding_size
     )
 
     generator, encoder, decoder, \
     discriminator, discriminator_copy, \
     keepers, \
     hunters, hunters_copies, \
-    sniffers = create_models(config['models'], config['data'], datasets, config['embedding_size'], tb_logger)
+    sniffers = create_models(config['models'], config['loops'], datasets, embedding_size, tb_logger)
 
     model = GanAutoencoder(
         generator, encoder, decoder,
@@ -682,8 +731,8 @@ def main():
         keepers,
         hunters, hunters_copies,
         sniffers,
-        datasets['train'].label_weights_groups,
-        config
+        datasets['train']['dataset'].label_weights_groups,
+        embedding_size, config
     )
 
     trainer = create_trainer(
@@ -716,31 +765,54 @@ def create_config():
         version=experiment['version'],
         default_hp_metric=False)
     log_dir = Path(tb_logger.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
 
-    previous_config = os.path.join(tb_logger.log_dir, 'config.yaml')
-    config = do_and_cache(lambda: config_dict, previous_config)
+    source_dir = log_dir
+    target_dir = log_dir
+    if 'copy' in experiment and experiment['copy']['enabled'] == True:
+        if log_dir.exists() and not experiment['overwrite']:
+            raise Exception('Cannot copy into existing version when overwrite is false.')
+        copy_config = experiment['copy']
+        copy_name = copy_config['name'] if 'name' in copy_config else experiment['name']
+        copy_version = copy_config['version'] if 'version' in copy_config else experiment['version']
+        copy_logger = pl_loggers.TensorBoardLogger(
+            '/mount/logs/',
+            name=copy_name,
+            version=copy_version,
+            default_hp_metric=False)
+        source_dir = copy_logger.log_dir
+        del copy_logger
+
+    if 'overwrite' in experiment and experiment['overwrite'] == True and log_dir.exists():
+        shutil.rmtree(log_dir)
+        if log_dir.exists():
+            log_dir.rmdir()
+        if log_dir.exists():
+            raise Exception(f'The directory [{log_dir}] still exists! delete it manually.')
+    log_dir.mkdir(parents=True, exist_ok=True)
+    source_config = os.path.join(source_dir, 'config.yaml')
+    target_config = os.path.join(target_dir, 'config.yaml')
+    config = do_and_cache(lambda: config_dict, target_config, source_config)
     return tb_logger, config
 
 
-def create_models(models_config, data_config, datasets, embedding_size, tb_logger):
+def create_models(models_config, loops_config, datasets, embedding_size, tb_logger):
     model_configs_dir = os.path.join(tb_logger.log_dir, 'model_configs')
     model_configs_dir_path = Path(model_configs_dir)
     if not model_configs_dir_path.exists():
-        model_configs_dir_path.mkdir()
+        model_configs_dir_path.mkdir(parents=True, exist_ok=True)
 
-    decoder, encoder, generator = create_generator(models_config, data_config, model_configs_dir)
+    decoder, encoder, generator = create_generator(models_config, loops_config, model_configs_dir)
 
-    discriminator, discriminator_copy = create_discriminator(models_config, data_config, model_configs_dir)
+    discriminator, discriminator_copy = create_discriminator(models_config, loops_config, model_configs_dir)
 
-    example_item = datasets['train'].label_options_groups
+    example_item = datasets['train']['dataset'].label_options_groups
     embedding_dims = (embedding_size * models_config['generator']['expansion']) // 2
 
-    keepers = create_keepers(models_config, data_config, embedding_dims, embedding_size, example_item, model_configs_dir)
+    keepers = create_keepers(models_config, loops_config, embedding_dims, embedding_size, example_item, model_configs_dir)
 
-    hunters, hunters_copies = create_hunters(models_config, data_config, embedding_dims, embedding_size, example_item, model_configs_dir)
+    hunters, hunters_copies = create_hunters(models_config, loops_config, embedding_dims, embedding_size, example_item, model_configs_dir)
 
-    sniffers = create_sniffers(models_config, data_config, embedding_size, example_item, model_configs_dir)
+    sniffers = create_sniffers(models_config, loops_config, embedding_size, example_item, model_configs_dir)
 
     return generator, encoder, decoder, \
            discriminator, discriminator_copy, \
@@ -749,7 +821,7 @@ def create_models(models_config, data_config, datasets, embedding_size, tb_logge
            sniffers
 
 
-def create_sniffers(models_config, data_config, embedding_size, example_item, model_configs_dir):
+def create_sniffers(models_config, loops_config, embedding_size, example_item, model_configs_dir):
     sniffers_layers = parse_layers(models_config['sniffers']['layers'])
     sniffers = generate_sniffers_by_example(
         example_item,
@@ -759,17 +831,17 @@ def create_sniffers(models_config, data_config, embedding_size, example_item, mo
     for key, sniffer in sniffers.items():
         print('{} sniffer:'.format(key))
         input_size = InputSize(
-            {label: (len(value), data_config['train']['segment_length'] // embedding_size) for label, value in
+            {label: (len(value), loops_config['train']['segment_length'] // embedding_size) for label, value in
              example_item[key].items()}
         )
         summary(sniffer,
                 input_size=input_size,
-                batch_size=data_config['train']['batch_size'],
+                batch_size=loops_config['train']['batch_size'],
                 device='cpu')
     return sniffers
 
 
-def create_hunters(models_config, data_config, embedding_dims, embedding_size, example_item, model_configs_dir):
+def create_hunters(models_config, loops_config, embedding_dims, embedding_size, example_item, model_configs_dir):
     hunters_layers = parse_layers(models_config['hunters']['layers'])
     hunters = generate_hunters_by_example(
         embedding_dims, example_item,
@@ -785,13 +857,13 @@ def create_hunters(models_config, data_config, embedding_dims, embedding_size, e
     for key, hunter in hunters.items():
         print(f'{key} hunter:')
         summary(hunter,
-                input_size=(embedding_dims, data_config['train']['segment_length'] // embedding_size),
-                batch_size=data_config['train']['batch_size'],
+                input_size=(embedding_dims, loops_config['train']['segment_length'] // embedding_size),
+                batch_size=loops_config['train']['batch_size'],
                 device='cpu')
     return hunters, hunters_copies
 
 
-def create_keepers(models_config, data_config, embedding_dims, embedding_size, example_item, model_configs_dir):
+def create_keepers(models_config, loops_config, embedding_dims, embedding_size, example_item, model_configs_dir):
     keepers_layers = parse_layers(models_config['keepers']['layers'])
     keepers = generate_keepers_by_example(
         embedding_dims, example_item,
@@ -801,13 +873,13 @@ def create_keepers(models_config, data_config, embedding_dims, embedding_size, e
     for key, keeper in keepers.items():
         print(f'{key} keeper:')
         summary(keeper,
-                input_size=(embedding_dims, data_config['train']['segment_length'] // embedding_size),
-                batch_size=data_config['train']['batch_size'],
+                input_size=(embedding_dims, loops_config['train']['segment_length'] // embedding_size),
+                batch_size=loops_config['train']['batch_size'],
                 device='cpu')
     return keepers
 
 
-def create_discriminator(models_config, data_config, model_configs_dir):
+def create_discriminator(models_config, loops_config, model_configs_dir):
     discriminator_layers = parse_layers(models_config['discriminator']['layers'])
     discriminator_config = do_and_cache(
         lambda: get_discriminator_config(
@@ -821,13 +893,13 @@ def create_discriminator(models_config, data_config, model_configs_dir):
     discriminator_copy = get_module_from_config(discriminator_config)
     print(f'discriminator:')
     summary(discriminator,
-            input_size=(1, data_config['train']['segment_length']),
-            batch_size=data_config['train']['batch_size'],
+            input_size=(1, loops_config['train']['segment_length']),
+            batch_size=loops_config['train']['batch_size'],
             device='cpu')
     return discriminator, discriminator_copy
 
 
-def create_generator(models_config, data_config, model_configs_dir):
+def create_generator(models_config, loops_config, model_configs_dir):
     generator_layers = parse_layers(models_config['generator']['layers'])
     generator_modules = get_modules_from_configs(
         do_and_cache_dict(
@@ -838,12 +910,10 @@ def create_generator(models_config, data_config, model_configs_dir):
     )
     encoder, decoder = generator_modules['encoder'], generator_modules['decoder']
     generator = torch.nn.Sequential(encoder, decoder)
-    for p in generator.parameters():
-        p.data.copy_(p.data * models_config['generator']['init_scale'])
     print(f'generator:')
     summary(generator,
-            input_size=(1, data_config['train']['segment_length']),
-            batch_size=data_config['train']['batch_size'],
+            input_size=(1, loops_config['train']['segment_length']),
+            batch_size=loops_config['train']['batch_size'],
             device='cpu')
     return decoder, encoder, generator
 
@@ -864,7 +934,7 @@ def create_trainer(model, logger, intervals, config):
                 best_checkpoint_callback
             ]
         ),
-        ValidationVisualizationCallback({'few': config['visualizations'], 'once': 1}),
+        ValidationVisualizationCallback({'few': config['visualize'], 'once': 1}),
         GanModelsGraphVisualizationCallback(),
         ValidationClassificationCallback(intervals['validation'], reset_callbacks=[
             ConfusionLoggingCallback()
@@ -877,7 +947,7 @@ def create_trainer(model, logger, intervals, config):
         max_steps=100000,
         logger=logger,
         val_check_interval=intervals['validation'],
-        num_sanity_val_steps=config['visualizations'],
+        num_sanity_val_steps=config['visualize'],
         callbacks=callbacks
     )
 

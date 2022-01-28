@@ -30,7 +30,7 @@ class NoiseAugmentor:
     def augment(self, random, labels, cut_labels, wav, noise_type, disable_wav_augmentation=False):
         mic_brand = self.label_options['mic-brand'][cut_labels['style']['mic-brand'][0].item()]
         if mic_brand not in self.noise_paths or noise_type not in self.noise_paths[mic_brand]:
-            noise_type = 'none'
+            noise_type = 'disabled'
         else:
             if not disable_wav_augmentation:
                 noise_options = self.noise_paths[mic_brand][noise_type]

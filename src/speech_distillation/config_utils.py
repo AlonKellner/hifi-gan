@@ -1,6 +1,21 @@
+def isfloat(str_param):
+    try:
+        float(str_param)
+        return True
+    except Exception:
+        return False
+
+def parse_layer_param(param):
+    if str.isdigit(param):
+        return int(param)
+    elif isfloat(param):
+        return float(param)
+    else:
+        return param
+
 def parse_layer_params(layer_params_config):
     layer_params = layer_params_config.split(',')
-    layer_params = [(int(param) if str.isdigit(param) else param) for param in layer_params]
+    layer_params = [parse_layer_param(param) for param in layer_params]
     return layer_params
 
 
