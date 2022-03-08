@@ -1,0 +1,341 @@
+{
+  "experiment": {
+    "name": "libriadapt/with_recon",
+    "version": 0,
+    "overwrite": false
+  },
+  "loops": {
+    "test": {
+      "batch_size": 3,
+      "mix_size": 3,
+      "segment_length": 109200
+    },
+    "train": {
+      "batch_size": 3,
+      "mix_size": 3,
+      "segment_length": 43680
+    },
+    "validation": {
+      "batch_size": 3,
+      "mix_size": 3,
+      "segment_length": 109200
+    }
+  },
+  "models": {
+    "generator": {
+      "expansion": 6,
+      "layers": [
+        "res,none:1,7,1,9,1,1e-00",
+        "res,sub_res:1,13,3,21,1,1e-00",
+        "res,sub_res:3,3,7,39,1,1e-00",
+        "res,sub_res:21,1,13,1,1,1e-00"
+      ]
+    },
+    "discriminator": {
+      "ensemble": 3,
+      "expansion": 1,
+      "layers": [
+        "roll:1,33,1",
+        "roll:1,21,5",
+        "roll:2,21,5",
+        "roll:3,13,5",
+        "roll:5,13,5",
+        "roll:8,9,5",
+        "all:13,9,5",
+        "roll:21,5,5",
+        "roll:33,3,5",
+        "all:54,1,5",
+        "roll:90,1,5",
+        "roll:144,33,1"
+      ]
+    },
+    "keepers": {
+      "ensemble": 3,
+      "layers": [
+        "conv:546,3,1,9,7,1e-00",
+        "conv:273,3,1,3,1,1e-00",
+        "conv:x,3,1,1,1,1e-00"
+      ]
+    },
+    "hunters": {
+      "ensemble": 3,
+      "layers": [
+        "conv:273,3,1,3,3,1e-00",
+        "conv:x,3,1,1,1,1e-00"
+      ]
+    },
+    "sniffers": {
+      "ensemble": 3,
+      "layers": [
+        "conv:273,3,1,9,1,1e-00",
+        "conv:273,3,1,3,1,1e-00",
+        "conv:x,3,1,1,1,1e-00"
+      ]
+    }
+  },
+  "debug": false,
+  "learning": {
+    "lr_decay": 0.99999,
+    "optimizers": {
+      "generator,keepers": 0.002,
+      "discriminator": 0.001,
+      "hunters": {
+        "style": 0.001,
+        "content": 0.001
+      },
+      "sniffers": {
+        "style": 0.001,
+        "content": 0.001
+      }
+    },
+    "loss_factors": {
+      "generator": {
+        "emb_recon": 1,
+        "raw_recon": {
+          "wav": 1,
+          "mel": 1
+        },
+        "adversarial": {
+          "discriminator": {
+            "disc": {
+              "main": 0,
+              "sub": 0
+            },
+            "fmap": 0
+          },
+          "hunters": 1e-01
+        },
+        "keepers": {
+          "style": {
+            "style": {
+              "codec": 1,
+              "highpass": 1,
+              "lowpass": 1,
+              "hilbert": 1,
+              "reverb": 1,
+              "mic-brand": 1,
+              "noise": 1,
+              "rir": 1
+            }
+          },
+          "content": {
+            "content": {
+              "sex": 1,
+              "speaker": 1,
+              "phones": 1,
+              "sad": 1
+            }
+          }
+        }
+      },
+      "discriminator": {
+        "main": 1,
+        "sub": 1
+      },
+      "hunters": {
+        "style": {
+          "content": {
+            "sex": 1,
+            "speaker": 1,
+            "phones": 1,
+            "sad": 1
+          }
+        },
+        "content": {
+          "style": {
+            "codec": 1,
+            "highpass": 1,
+            "lowpass": 1,
+            "hilbert": 1,
+            "reverb": 1,
+            "mic-brand": 1,
+            "noise": 1,
+            "rir": 1
+          }
+        }
+      },
+      "sniffers": {
+        "style": {
+          "content": {
+            "sex": 1,
+            "speaker": 1,
+            "phones": 1,
+            "sad": 1
+          }
+        },
+        "content": {
+          "style": {
+            "codec": 1,
+            "highpass": 1,
+            "lowpass": 1,
+            "hilbert": 1,
+            "reverb": 1,
+            "mic-brand": 1,
+            "noise": 1,
+            "rir": 1
+          }
+        }
+      }
+    },
+    "loss_funcs": {
+      "generator": {
+        "emb_recon": "l1",
+        "raw_recon": {
+          "wav": "l1",
+          "mel": "l1"
+        },
+        "adversarial": {
+          "discriminator": {
+            "disc": "+",
+            "fmap": "l1"
+          },
+          "hunters": "seg_bias_bce"
+        },
+        "keepers": "seg_bce"
+      },
+      "discriminator": "-",
+      "hunters": "seg_bce",
+      "sniffers": "seg_bce"
+    },
+    "loss_backward": {
+      "generator": {
+        "emb_recon": true,
+        "raw_recon": {
+          "wav": true,
+          "mel": true
+        },
+        "adversarial": {
+          "discriminator": true,
+          "hunters": {
+            "content": true,
+            "style": true
+          }
+        },
+        "keepers": {
+          "content": true,
+          "style": true
+        }
+      },
+      "discriminator": true,
+      "hunters": {
+        "content": true,
+        "style": true
+      },
+      "sniffers": {
+        "content": true,
+        "style": true
+      }
+    },
+    "accumulated_grad_batches": 100,
+    "gradient_clip": 50,
+    "adam_b1": 0.8,
+    "adam_b2": 0.99
+  },
+  "visualize": 1,
+  "data": {
+    "test": {
+      "dataset": {
+        "source": "test",
+        "deterministic": true
+      },
+      "loader": {
+        "shuffle": true,
+        "num_workers": 12
+      }
+    },
+    "train": {
+      "dataset": {
+        "source": "train"
+      },
+      "loader": {
+        "shuffle": true,
+        "num_workers": 12
+      }
+    },
+    "validation": {
+      "dataset": {
+        "source": "train",
+        "deterministic": true,
+        "size": 100
+      },
+      "loader": {
+        "shuffle": false,
+        "num_workers": 12
+      }
+    }
+  },
+  "sampling_rate": 16000,
+  "augmentation": {
+    "options": {
+      "noise": [
+        "rain",
+        "wind",
+        "laugh"
+      ],
+      "rir": [
+        "smallroom",
+        "mediumroom",
+        "largeroom"
+      ],
+      "reverb": [
+        "yes"
+      ],
+      "lowpass": [
+        "100",
+        "200",
+        "300",
+        "400"
+      ],
+      "highpass": [
+        "1000",
+        "2000",
+        "3000",
+        "4000"
+      ],
+      "codec": [
+        "wav",
+        "gsm",
+        "mp3",
+        "vorbis"
+      ],
+      "hilbert": [
+        "yes"
+      ]
+    },
+    "probs": {
+      "prob": 0.5,
+      "sub_probs": {
+        "noise": {
+          "prob": 0.5
+        },
+        "rir": {
+          "prob": 0.5
+        },
+        "lowpass": {
+          "prob": 0.5
+        },
+        "highpass": {
+          "prob": 0.5
+        },
+        "reverb": {
+          "prob": 0.5
+        },
+        "codec": {
+          "prob": 0.5
+        },
+        "hilbert": {
+          "prob": 0.5
+        }
+      }
+    }
+  },
+  "mel": {
+    "num_mels": 80,
+    "num_freq": 1025,
+    "n_fft": 1024,
+    "hop_size": 256,
+    "win_size": 1024,
+    "fmin": 0,
+    "fmax": 8000
+  }
+}

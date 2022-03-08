@@ -7,6 +7,7 @@ from pytorch_lightning.callbacks import Callback
 from src.utils import plot_spectrogram, plot_categorical, plot_image
 from logging_utils import rank
 
+EPSILON = 1e-04
 
 class ValidationVisualizationCallback(Callback):
     def __init__(self, amounts_to_log):
@@ -239,6 +240,20 @@ class ValidationVisualizationCallback(Callback):
         else:
             label = label.squeeze()
             if label.dtype not in [torch.int64, torch.int32, torch.int16, torch.int8]:
-                label = label.argmax(dim=1)
-            label = label.squeeze().unsqueeze(1)
+                label = self._probabilities_to_set(label, dim=1)
+            else:
+                label = label.squeeze().unsqueeze(1)
             return label
+
+    def _probabilities_to_set(self, probabilities, dim=1):
+        amount = 12
+        broadcast_shape = (*(probabilities.size()), amount)
+        broadcast_dims = tuple(range(len(broadcast_shape)))
+        permutation_dims = (broadcast_dims[-1], *broadcast_dims[:-1])
+        linspace = torch.broadcast_to(torch.linspace(0 + EPSILON, 1 - EPSILON, amount), broadcast_shape).permute(permutation_dims)
+        final_shape = linspace.size()
+        cumsum = torch.broadcast_to(torch.cumsum(probabilities, dim=dim), final_shape)
+        permutation_dims = (*broadcast_dims[1:-1], broadcast_dims[0], *broadcast_dims[-1:])
+        threshold = torch.where(cumsum < linspace, torch.ones_like(cumsum)*2, cumsum)
+        argmin = threshold.permute(permutation_dims).argmin(dim=dim)
+        return argmin

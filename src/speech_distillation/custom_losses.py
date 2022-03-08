@@ -45,6 +45,25 @@ def seg_bias_bce_loss(x, target, truth, ratios: (float,) = None, dim=1):
     return bces[weights_hash](x_t, target_t, one_hot_truth)
 
 
+class SegBiasBCELoss(torch.nn.Module):
+    def __init__(self, ratios):
+        super(SegBiasBCELoss, self).__init__()
+        weights_tensors = ratios_to_weights_tensors(ratios)
+        self.true_weights, self.false_weights = weights_tensors['true'], weights_tensors['false']
+
+    def forward(self, x, target, truth):
+        high = torch.max(truth, target)
+        low = torch.min(truth, target)
+        scale = high - low + EPSILON
+        x_norm = (x - low) / scale
+        x_clamped = torch.clamp(x_norm, min=0, max=1)
+
+        biased_cross_entropy = F.binary_cross_entropy(x_clamped, 1-truth, reduction='none') * (scale * scale)
+
+        total_loss = normalize_segmentation_loss(biased_cross_entropy, target, self.true_weights, self.false_weights)
+        return total_loss
+
+
 def ratios_to_weights_tensors(ratios):
     return {key: ratios_to_weights_tensor(value) for key, value in ratios.items()}
 
@@ -70,23 +89,15 @@ class SegBCELoss(torch.nn.Module):
         return total_loss
 
 
-class SegBiasBCELoss(torch.nn.Module):
-    def __init__(self, ratios):
-        super(SegBiasBCELoss, self).__init__()
-        weights_tensors = ratios_to_weights_tensors(ratios)
-        self.true_weights, self.false_weights = weights_tensors['true'], weights_tensors['false']
+class SimpleCosineLoss(torch.nn.Module):
+    def __init__(self):
+        super(SimpleCosineLoss, self).__init__()
+        self.cos = torch.nn.CosineEmbeddingLoss()
 
-    def forward(self, x, target, truth):
-        high = torch.max(truth, target)
-        low = torch.min(truth, target)
-        scale = high - low + EPSILON
-        x_norm = (x - low) / scale
-        x_clamped = torch.clamp(x_norm, min=0, max=1)
-
-        biased_cross_entropy = F.binary_cross_entropy(x_clamped, 1-truth, reduction='none') * (scale * scale)
-
-        total_loss = normalize_segmentation_loss(biased_cross_entropy, target, self.true_weights, self.false_weights)
-        return total_loss
+    def forward(self, x, target):
+        flat_x = torch.flatten(x, start_dim=1)
+        flat_target = torch.flatten(target, start_dim=1)
+        return self.cos(flat_x, flat_target, torch.ones(flat_x.size(0), device=flat_x.device))
 
 
 def normalize_segmentation_loss(loss, target, true_weights, false_weights, batch_dim=0, class_dim=2):
@@ -110,10 +121,9 @@ loss_types = {
     '+': lambda: plus_mean_loss,
     'seg_bce': lambda: seg_bce_loss,
     'seg_bias_bce': lambda: seg_bias_bce_loss,
-    'mse': torch.nn.MSELoss,
-    'mae': torch.nn.L1Loss,
     'l2': torch.nn.MSELoss,
-    'l1': torch.nn.L1Loss
+    'l1': torch.nn.L1Loss,
+    'cos': SimpleCosineLoss
 }
 
 

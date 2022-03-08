@@ -1,7 +1,7 @@
 {
   "experiment": {
-    "name": "libriadapt/no_hunt-all_all",
-    "version": 18,
+    "name": "libriadapt/full/non_res_layers",
+    "version": 1,
     "overwrite": false
   },
   "loops": {
@@ -23,12 +23,12 @@
   },
   "models": {
     "generator": {
-      "expansion": 6,
+      "expansion": 4,
       "layers": [
-        "res,none:1,7,1,3,1,1e-00",
-        "res,sub_res:1,13,3,7,1,1e-00",
-        "res,sub_res:3,3,7,13,1,1e-00",
-        "res,sub_res:21,1,13,1,1,1e-00"
+        "res.1,none:1,3,1,1,1,1e-00",
+        "res.1|conv.1,sub_res:1,3,3,1,1,1e-00",
+        "res.1|conv.1,sub_res:3,3,7,1,1,1e-00",
+        "res.1|conv.1,sub_res:21,3,13,1,1,1e-00"
       ]
     },
     "discriminator": {
@@ -52,30 +52,33 @@
     "keepers": {
       "ensemble": 3,
       "layers": [
-        "conv:546,3,1,3,7,1e-00",
-        "conv:x,3,1,1,1,1e-00"
+        "conv:273,3,1,3,1,1e-00",
+        "conv:273,3,1,9,1,1e-00",
+        "conv:x,3,1,27,1,1e-00"
       ]
     },
     "hunters": {
       "ensemble": 3,
       "layers": [
-        "conv:546,3,1,3,7,1e-00",
-        "conv:x,3,1,1,1,1e-00"
+        "conv:273,3,1,3,1,1e-00",
+        "conv:273,3,1,9,1,1e-00",
+        "conv:x,3,1,27,1,1e-00"
       ]
     },
     "sniffers": {
       "ensemble": 3,
       "layers": [
         "conv:273,3,1,3,1,1e-00",
-        "conv:x,3,1,1,1,1e-00"
+        "conv:273,3,1,9,1,1e-00",
+        "conv:x,3,1,27,1,1e-00"
       ]
     }
   },
   "debug": false,
   "learning": {
-    "lr_decay": 0.99995,
+    "lr_decay": 0.99999,
     "optimizers": {
-      "generator,keepers": 0.01,
+      "generator,keepers": 0.002,
       "discriminator": 0.001,
       "hunters": {
         "style": 0.001,
@@ -88,20 +91,20 @@
     },
     "loss_factors": {
       "generator": {
-        "emb_recon": 0,
+        "emb_recon": 1,
         "raw_recon": {
-          "wav": 0,
-          "mel": 0
+          "wav": 1,
+          "mel": 1
         },
         "adversarial": {
           "discriminator": {
             "disc": {
-              "main": 0,
-              "sub": 0
+              "main": 1,
+              "sub": 1
             },
-            "fmap": 0
+            "fmap": 1
           },
-          "hunters": 0
+          "hunters": 1e-01
         },
         "keepers": {
           "style": {
@@ -185,7 +188,7 @@
         "adversarial": {
           "discriminator": {
             "disc": "+",
-            "fmap": "l1"
+            "fmap": "cos"
           },
           "hunters": "seg_bias_bce"
         },
@@ -225,7 +228,7 @@
       }
     },
     "accumulated_grad_batches": 100,
-    "gradient_clip": 1e05,
+    "gradient_clip": 100,
     "adam_b1": 0.8,
     "adam_b2": 0.99
   },

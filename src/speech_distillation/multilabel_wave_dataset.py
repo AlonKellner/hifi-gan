@@ -56,7 +56,6 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         self.fine_tuning = fine_tuning
         self.size = size
         self.deterministic = deterministic
-        self.random = random.Random()
         self.disable_wavs = disable_wavs
         self.should_augment = augmentation_config is not None
         if self.should_augment:
@@ -251,8 +250,9 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
 
     def get_timed_labels_value_counts_by_index(self, i):
         try:
+            currand = random.Random()
             if self.deterministic:
-                self.random.seed(i)
+                currand.seed(i)
             if self.size < len(self.files_with_labels):
                 i = (int(len(self.files_with_labels) / PHI) * i) % len(self.files_with_labels)
             labels, timed_labels = self.get_timed_labels(i)
@@ -334,18 +334,19 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         return grouped_labels
 
     def __getitem__(self, index):
+        currand = random.Random()
         if self.deterministic:
-            self.random.seed(index)
+            currand.seed(index)
         if self.size < len(self.files_with_labels):
             index = (int(len(self.files_with_labels) / PHI) * index) % len(self.files_with_labels)
 
-        item = self.get_augmented_item(index)
+        item = self.get_augmented_item(index, currand)
         return item
 
-    def get_augmented_item(self, index):
-        wav, wav_path, time_labels, grouped_labels = self.get_cut_item(index)
+    def get_augmented_item(self, index, currand):
+        wav, wav_path, time_labels, grouped_labels = self.get_cut_item(index, currand)
         if self.should_augment:
-            wav, time_labels, grouped_labels = self.augment_item(wav, time_labels, grouped_labels)
+            wav, time_labels, grouped_labels = self.augment_item(wav, time_labels, grouped_labels, currand)
         return wav, wav_path, time_labels, grouped_labels
 
     def create_pickle_label(self, index):
@@ -428,7 +429,7 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         audio = torch.FloatTensor(audio)
         return audio.squeeze(0), str(wav_path)
 
-    def get_cut_item(self, index):
+    def get_cut_item(self, index, currand):
         wav, wav_path = self.get_wav(index)
         pickle_label_groups = self.get_pickle_label(index)
         length = wav.size(0)
@@ -444,12 +445,12 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
 
         if length >= self.segment_length:
             max_embedded_start = embedded_length - embedded_segment_length
-            embedded_start = self.random.randint(0, max_embedded_start)
+            embedded_start = currand.randint(0, max_embedded_start)
             start = embedded_start * self.embedding_size
             # print('trim: ', start, embedded_start)
         else:
             embedded_padding = embedded_segment_length - embedded_length
-            prefix_embedded_padding = self.random.randint(0, embedded_padding)
+            prefix_embedded_padding = currand.randint(0, embedded_padding)
             postfix_embedded_padding = embedded_padding - prefix_embedded_padding
             padding = embedded_padding * self.embedding_size
             prefix_padding = prefix_embedded_padding * self.embedding_size
@@ -474,18 +475,18 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
         grouped_labels = self.get_grouped_labels(index)
         return wav, wav_path, pickle_label_groups, grouped_labels
 
-    def augment_item(self, cut_wav, cut_label, grouped_labels):
+    def augment_item(self, cut_wav, cut_label, grouped_labels, currand):
         options = self.aug_options
         probs = self.aug_probs
         methods = self.aug_methods
         (length,) = next(iter(next(iter(cut_label.values())).values())).size()
         augmented_wav = cut_wav
         augmented_label = pd.DataFrame(['none'] * length, columns=['none'])
-        should_augment = probs['prob'] > self.random.random()
+        should_augment = probs['prob'] > currand.random()
         for augmentation in options.keys():
             augmented_wav, augmented_label, value = self.augment_item_with(augmented_wav, augmented_label, cut_label,
                                                                            methods, options,
-                                                                           probs, augmentation, should_augment)
+                                                                           probs, augmentation, currand, should_augment)
             for section, current_label_groups in augmentation_label_groups.items():
                 if augmentation in current_label_groups:
                     grouped_labels[section][augmentation] = value
@@ -496,16 +497,16 @@ class MultilabelWaveDataset(torch.utils.data.Dataset):
                 cut_label[key][label] = value
         return augmented_wav, cut_label, grouped_labels
 
-    def augment_item_with(self, augmented_wav, augmented_label, cut_label, methods, options, probs, aug_type,
+    def augment_item_with(self, augmented_wav, augmented_label, cut_label, methods, options, probs, aug_type, currand,
                           should=True):
         value = 'disabled'
         probs = probs['sub_probs'][aug_type]
         values = options[aug_type]
         aug_method = methods[aug_type]
-        if should and probs['prob'] > self.random.random():
-            value = self.random.choice(values)
+        if should and probs['prob'] > currand.random():
+            value = currand.choice(values)
             augmented_label, augmented_wav, value = aug_method(
-                self.random,
+                currand,
                 augmented_label,
                 cut_label,
                 augmented_wav,

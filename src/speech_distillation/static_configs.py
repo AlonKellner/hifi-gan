@@ -1,4 +1,5 @@
 import numpy as np
+from config_utils import parse_layer_param
 
 LRELU_SLOPE = 0.1
 
@@ -18,7 +19,8 @@ def get_discriminator_config(layers, expansion_size=1, ensemble_size=3):
     )
 
 
-def get_discriminator_process_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01, normalization='weight'):
+def get_discriminator_process_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01,
+                                    normalization='weight'):
     return [('conv', (extra_channels * channels, 1, 3, 1, 2)), ('tanh',)]
 
 
@@ -72,12 +74,15 @@ def get_static_single_all_in_one_discriminator(layers, extra_channels=1):
     )
 
 
-def get_discriminator_after_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01, normalization='weight'):
-    after_layer = [('conv', (extra_channels * channels, 1, kernel, 1, dilation, groups, init, normalization)), ('tanh',)]
+def get_discriminator_after_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01,
+                                  normalization='weight'):
+    after_layer = [('conv', (extra_channels * channels, 1, kernel, 1, dilation, groups, init, normalization)),
+                   ('tanh',)]
     return after_layer
 
 
-def get_discriminator_in_layer(extra_channels, layer_type, next_channels, channels, kernel, dilation=1, init=0.01, groups=1):
+def get_discriminator_in_layer(extra_channels, layer_type, next_channels, channels, kernel, dilation=1, init=0.01,
+                               groups=1):
     if layer_type[0] == 'roll':
         raw_blocks = [get_roll_raw_block(next_channels)]
     else:
@@ -98,7 +103,8 @@ def get_discriminator_in_layers(extra_channels, layers):
     return in_layers
 
 
-def get_discriminator_before_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01, normalization='spectral'):
+def get_discriminator_before_layer(extra_channels, channels, kernel, dilation=1, groups=1, init=0.01,
+                                   normalization='spectral'):
     before_layer = [
         ('conv', (1, extra_channels * channels, kernel, 1, dilation, groups, init, normalization)),
         ('lrelu', LRELU_SLOPE, ['all_in_one']),
@@ -179,17 +185,19 @@ def get_leveln_model(inner_encode, inner_decode, expansion, current_level_type, 
 
 def get_first_level_model(encoder2, decoder2, expansion_size, layer_type, channels=1, kernel=63, stride=1, dilation=1,
                           groups=1, init=0.01, layers_params=None):
+    base_type_params, extra_type = layer_type
+    base_type, base_layers_num = [parse_layer_param(p) for p in base_type_params.split('.')]
     en_layer = [
         ('conv', (1, expansion_size, kernel, 1, dilation, groups, init, 'spectral')),
         ('lrelu', LRELU_SLOPE),
-        get_base_block_config(expansion_size, 1, kernel, 1, dilation, groups, init)
+        get_base_block_config(base_layers_num, expansion_size, 1, kernel, 1, dilation, groups, init)
     ]
     de_layer = [
-        get_base_block_config(expansion_size, 1, kernel, 1, dilation, groups, init),
+        get_base_block_config(base_layers_num, expansion_size, 1, kernel, 1, dilation, groups, init),
         ('conv', (expansion_size, 1, kernel, 1, dilation, groups, init))
     ]
 
-    base_type, extra_type = layer_type
+
     if base_type == 'res':
         en_layer = ('sum', [
             en_layer,
@@ -201,7 +209,7 @@ def get_first_level_model(encoder2, decoder2, expansion_size, layer_type, channe
         ])
     if extra_type == 'multi_sub_res':
         pooling_multipliers = [layer_params[2] for layer_types, layer_params in layers_params]
-        pooling_dilations = [int(np.prod(pooling_multipliers[:i])) for i in range(1, len(pooling_multipliers)+1)]
+        pooling_dilations = [int(np.prod(pooling_multipliers[:i])) for i in range(1, len(pooling_multipliers) + 1)]
         sub_res_layers = [('sub_res', ('poold', (127, 1, pooling_dilation))) for pooling_dilation in pooling_dilations]
         sub_res_layers.reverse()
         de_layer = [
@@ -252,20 +260,29 @@ def get_decaying_block(initial_skip_ratio, skip_tag, anti_tag, noise_channels, i
 
 
 def get_block_config(block_type, expansion, channel_size, kernel_size, stride, dilation, groups=1, init=0.01):
-    block = get_base_block_config(expansion, channel_size, kernel_size, stride, dilation, groups, init)
-    if block_type == 'res':
-        block = ('res', block)
-    return block
+    sub_blocks_params = [tuple(parse_layer_param(p) for p in block.split('.')) for block in block_type.split('|')]
+    sub_blocks = [
+        get_sub_block_config(*sub_block_params, expansion, channel_size, kernel_size, stride, dilation, groups, init)
+        for sub_block_params in sub_blocks_params
+    ]
+    return sub_blocks
 
 
-def get_base_block_config(expansion, channel_size, kernel_size, stride, dilation, groups=1, init=0.01):
+def get_sub_block_config(sub_block_type, sub_layer_num, expansion, channel_size, kernel_size, stride, dilation, groups,
+                         init):
+    sub_block = get_base_block_config(sub_layer_num, expansion, channel_size, kernel_size, stride, dilation, groups,
+                                      init)
+    if sub_block_type == 'res':
+        sub_block = ('res', sub_block)
+    return sub_block
+
+
+def get_base_block_config(layer_num, expansion, channel_size, kernel_size, stride, dilation, groups=1, init=0.01):
     expanded_size = channel_size * expansion * stride
     block = [
-        ('conv', (expanded_size, expanded_size, kernel_size, 1, dilation, groups, init)),
-        ('lrelu', LRELU_SLOPE),
-        ('conv_shuffle', (expanded_size, expanded_size, kernel_size, 1, dilation, groups, init)),
-        ('lrelu', LRELU_SLOPE)
-    ]
+                ('conv', (expanded_size, expanded_size, kernel_size, 1, dilation, groups, init)),
+                ('lrelu', LRELU_SLOPE)
+            ] * layer_num
     return block
 
 

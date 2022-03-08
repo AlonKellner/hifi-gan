@@ -393,6 +393,7 @@ class GanAutoencoder(pl.LightningModule):
             'truth': wav_narrow,
             'generated': wav_generated_all
         }}
+        extra_data = self._detach_recursively(extra_data, cpu=True)
         return all_losses, out_data, extra_data
 
     def unmix_embedding(self, embedding, data_type):
@@ -482,11 +483,13 @@ class GanAutoencoder(pl.LightningModule):
 
     def _detach_recursively(self, losses, cpu=False):
         if isinstance(losses, dict):
-            return {key: self._detach_recursively(loss) for key, loss in losses.items()}
+            return {key: self._detach_recursively(loss, cpu=cpu) for key, loss in losses.items()}
+        if isinstance(losses, (list, tuple)):
+            return [self._detach_recursively(loss, cpu=cpu) for loss in losses]
         elif isinstance(losses, torch.Tensor):
+            losses = losses.detach()
             if cpu:
                 losses = losses.cpu()
-            losses = losses.detach()
             return losses
         else:
             return losses
@@ -709,31 +712,7 @@ def create_datasets(loops_config, datasets_config, augmentation_config, sampling
 def main():
     print('Initializing Training Process...')
 
-    tb_logger, config = create_config()
-    parsed_layers = parse_layers(config['models']['generator']['layers'])
-    embedding_size = int(np.prod([layer_params[2] for layer_types, layer_params in parsed_layers]))
-
-    set_debug_apis(config['debug'])
-
-    datasets = create_datasets(
-        config['loops'], config['data'], config['augmentation'], config['sampling_rate'], embedding_size
-    )
-
-    generator, encoder, decoder, \
-    discriminator, discriminator_copy, \
-    keepers, \
-    hunters, hunters_copies, \
-    sniffers = create_models(config['models'], config['loops'], datasets, embedding_size, tb_logger)
-
-    model = GanAutoencoder(
-        generator, encoder, decoder,
-        discriminator, discriminator_copy,
-        keepers,
-        hunters, hunters_copies,
-        sniffers,
-        datasets['train']['dataset'].label_weights_groups,
-        embedding_size, config
-    )
+    config, datasets, model, tb_logger = initialize_model_objects()
 
     trainer = create_trainer(
         model=model,
@@ -745,6 +724,31 @@ def main():
         config=config
     )
     trainer.fit(model, datasets['train']['loader'], datasets['validation']['loader'])
+
+
+def initialize_model_objects():
+    tb_logger, config = create_config()
+    parsed_layers = parse_layers(config['models']['generator']['layers'])
+    embedding_size = int(np.prod([layer_params[2] for layer_types, layer_params in parsed_layers]))
+    set_debug_apis(config['debug'])
+    datasets = create_datasets(
+        config['loops'], config['data'], config['augmentation'], config['sampling_rate'], embedding_size
+    )
+    generator, encoder, decoder, \
+    discriminator, discriminator_copy, \
+    keepers, \
+    hunters, hunters_copies, \
+    sniffers = create_models(config['models'], config['loops'], datasets, embedding_size, tb_logger)
+    model = GanAutoencoder(
+        generator, encoder, decoder,
+        discriminator, discriminator_copy,
+        keepers,
+        hunters, hunters_copies,
+        sniffers,
+        datasets['train']['dataset'].label_weights_groups,
+        embedding_size, config
+    )
+    return config, datasets, model, tb_logger
 
 
 def create_config():
@@ -944,7 +948,7 @@ def create_trainer(model, logger, intervals, config):
         gpus=1,
         num_nodes=1,
         precision=32,
-        max_steps=100000,
+        max_steps=1000000,
         logger=logger,
         val_check_interval=intervals['validation'],
         num_sanity_val_steps=config['visualize'],

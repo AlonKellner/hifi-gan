@@ -1,31 +1,13 @@
-import pickle
-import random
-import time
 import warnings
 import json
-from src.env import AttrDict, build_env
-from pathlib import Path
-
-from src.speech_distillation.custom_losses import bias_corrected_cross_entropy_loss
-from src.speech_distillation.cycle_calculator import calculate_cycles
-from src.speech_distillation.embedding_classifiers.embedding_classifiers_static_configs import \
-    generate_keepers_by_example
-from src.speech_distillation.label_bias_sniffer import generate_sniffers_by_example
-from src.speech_distillation.lightning_model import create_datasets
-from src.speech_distillation.tensor_utils import mix, expand
-from textgrid_parsing import parse_textgrid
-from multilabel_wave_dataset import MultilabelWaveDataset
+import warnings
 from multiprocessing import Pool
-from src.meldataset import save_wav
+
+from src.speech_distillation.lightning_model import create_datasets
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import torch
-from torch.nn import functional as F
-from torchsummary import summary
-
-from static_configs import get_generator_configs, get_last_level_model, \
-    get_leveln_model, get_block_config, get_discriminator_config
-from configurable_module import get_module_from_config
 
 with open('config/config.json') as f:
     data = f.read()
@@ -33,18 +15,26 @@ with open('config/config.json') as f:
 config = json.loads(data)
 
 datasets = create_datasets(
-    config['loops'], config['data'], config['augmentation'], config['sampling_rate'], config['embedding_size']
+    config['loops'], config['data'], config['augmentation'], config['sampling_rate'], 273
 )
 train_dataset = datasets['train']['dataset']
 test_dataset = datasets['test']['dataset']
 
 torch.set_printoptions(profile='full')
-print(train_dataset.get_fresh_label(0))
-print(test_dataset.get_fresh_label(0))
+# print(train_dataset.get_fresh_label(0))
+# print(test_dataset.get_fresh_label(0))
 
 
-# validation_dataset = datasets['validation']['dataset']
-# print(len(validation_dataset))
+validation_dataset = datasets['validation']['dataset']
+print(len(validation_dataset))
+
+def get_2(x):
+    return train_dataset[2][-1]
+
+with Pool(16) as pool:
+    all_labels = pool.map(get_2, range(100))
+for label in all_labels:
+    print(label)
 # for i, item in enumerate(validation_dataset):
 #     if i % 100 == 0:
 #         print(i)

@@ -14,7 +14,7 @@ all_colors = all_colors[:300]
 
 
 def plot_spectrogram(spectrogram):
-    fig, ax = plt.subplots(figsize=(10, 2))
+    fig, ax = plt.subplots(figsize=(10, 4))
     im = ax.imshow(spectrogram, aspect="auto", origin="lower",
                    interpolation='none')
     plt.colorbar(im, ax=ax)
@@ -40,7 +40,7 @@ def plot_categorical(categorical):
     cmap = colors.ListedColormap(all_colors)
     bounds = [i - 0.5 for i in range(len(all_colors))]
     norm = colors.BoundaryNorm(bounds, cmap.N)
-    fig, ax = plt.subplots(figsize=(10, 2))
+    fig, ax = plt.subplots(figsize=(10, 4))
     im = ax.imshow(categorical, aspect="auto", origin="lower",
                    interpolation='none', cmap=cmap, norm=norm)
     plt.colorbar(im, ax=ax)

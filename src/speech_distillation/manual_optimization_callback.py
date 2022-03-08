@@ -37,6 +37,7 @@ class ManualOptimizationCallback(Callback):
                 optimizer.zero_grad()
 
             learning_models_keys = list(learning_models.keys())
+            learning_models_keys.sort()
             schedulers = pl_module.lr_schedulers()
             schedulers = schedulers if isinstance(schedulers, list) else [schedulers]
             for index, scheduler in enumerate(schedulers):
@@ -48,8 +49,7 @@ class ManualOptimizationCallback(Callback):
             self.last_gradient_step = pl_module.global_step
 
     def scale_gradients_(self, parameters, pl_module):
-        steps_made = pl_module.global_step - self.last_gradient_step
-        scale_factor = 1.0/steps_made
+        scale_factor = 1.0/self.accumulated_grad_batches
         if isinstance(parameters, torch.Tensor):
             parameters = [parameters]
         parameters = [p for p in parameters if p.grad is not None]
